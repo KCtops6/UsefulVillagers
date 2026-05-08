@@ -1,0 +1,26 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="productivevillagers"
+version="1.0.0"
+displayName="Productive Villagers"
+authors="kctops6"
+description='''
+Makes villagers more useful by allowing manual inventory management.
+'''
+
+[[dependencies.productivevillagers]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.productivevillagers]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1]"
+ordering="NONE"
+side="BOTH"
