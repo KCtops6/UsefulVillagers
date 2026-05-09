@@ -37,47 +37,151 @@ public class FarmerAutomationHandler {
     );
 
     @SubscribeEvent
-    public static void onVillagerTick(LivingEvent.LivingTickEvent event) {
+    public static void onDiligenceTick(LivingEvent.LivingTickEvent event) {
         if (event.getEntity() instanceof Villager villager && !villager.level().isClientSide) {
             if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
-                ServerLevel level = (ServerLevel) villager.level();
 
-                // 1. Process Auto-Trading Logic
-                processAutoTrade(villager);
+                // PRIORITY 1: Harvesting and Replanting
+                boolean busyFarming = performDiligentFarming(villager);
 
-                // 2. Process Smart Breeding Logic
-                // If village is full, clear the villager's food desire so they don't throw items
-                if (!canVillageExpand(level, villager.blockPosition())) {
-                    preventFoodWaste(villager);
+                if (!busyFarming) {
+                    // NEW: Use Bone Meal if available in inventory
+                    useInventoryBoneMeal(villager);
+
+                    // PRIORITY 2: Composting excess seeds
+                    checkComposter(villager);
+
+                    // PRIORITY 3: Deposit everything else into the chest
+                    depositSurplus(villager);
                 }
             }
         }
     }
 
-    private static void processAutoTrade(Villager villager) {
-        SimpleContainer inventory = villager.getInventory();
-        int threshold = PvConfig.ITEM_THRESHOLD.get();
+    private static void useInventoryBoneMeal(Villager villager) {
+        SimpleContainer inv = villager.getInventory();
 
-        for (MerchantOffer offer : villager.getOffers()) {
-            if (offer.isOutOfStock()) continue;
+        // Check if the villager has any bone meal
+        if (inv.countItem(Items.BONE_MEAL) > 0) {
+            BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE)
+                    .map(GlobalPos::pos).orElse(villager.blockPosition());
 
-            Item inputItem = offer.getBaseCostA().getItem();
-            if (FARMER_INPUTS.contains(inputItem)) {
-                int countInInv = inventory.countItem(inputItem);
+            // Find and grow a nearby crop
+            applyBoneMealToNearbyCrops(villager, workPos);
 
-                if (countInInv >= threshold) {
-                    // 1. Consume items and add result
-                    inventory.removeItemType(inputItem, offer.getBaseCostA().getCount());
-                    inventory.addItem(offer.getResult().copy());
+            // Consume one bone meal from inventory
+            inv.removeItemType(Items.BONE_MEAL, 1);
+            villager.swing(InteractionHand.MAIN_HAND);
+        }
+    }
 
-                    // 2. Award XP
-                    int xpAmount = (int) (offer.getXp() * PvConfig.XP_MULTIPLIER.get());
-                    villager.setVillagerXp(villager.getVillagerXp() + Math.max(1, xpAmount));
+    private static void applyBoneMealToNearbyCrops(Villager villager, BlockPos workPos) {
+        ServerLevel level = (ServerLevel) villager.level();
+        int range = PvConfig.HARVEST_RANGE.get();
+        BlockPos targetCrop = null;
 
-                    // 3. Increment trade uses
-                    offer.assemble();
+        // Track the lowest growth percentage (0.0 to 1.0)
+        double lowestGrowthPercentage = 1.0;
 
-                    break;
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-range, -1, -range), workPos.offset(range, 1, range))) {
+            BlockState state = level.getBlockState(pos);
+
+            if (state.getBlock() instanceof CropBlock crop) {
+                // Use public methods instead of getAgeProperty()
+                int currentAge = crop.getAge(state);
+                int maxAge = crop.getMaxAge();
+
+                if (currentAge < maxAge) {
+                    double growthPercentage = (double) currentAge / maxAge;
+                    if (growthPercentage < lowestGrowthPercentage) {
+                        lowestGrowthPercentage = growthPercentage;
+                        targetCrop = pos.immutable();
+                    }
+                }
+            }
+        }
+
+        if (targetCrop != null) {
+            ItemStack fakeBoneMeal = new ItemStack(Items.BONE_MEAL);
+            if (net.minecraft.world.item.BoneMealItem.applyBonemeal(fakeBoneMeal, level, targetCrop, null)) {
+                level.levelEvent(2005, targetCrop, 0); // Success particles
+            }
+        }
+    }
+
+    private static void depositSurplus(Villager villager) {
+        ServerLevel level = (ServerLevel) villager.level();
+        SimpleContainer inv = villager.getInventory();
+
+        // Locate the workstation to find a nearby chest
+        BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE)
+                .map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return;
+
+        // Search for a chest within a small radius of the workstation
+        BlockPos chestPos = null;
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
+            if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
+                chestPos = pos.immutable();
+                break;
+            }
+        }
+
+        if (chestPos != null) {
+            // Move to the chest if too far away
+            if (villager.blockPosition().distSqr(chestPos) > 4.0) {
+                villager.getNavigation().moveTo(chestPos.getX(), chestPos.getY(), chestPos.getZ(), 0.5D);
+            } else {
+                // Interact with the chest using Forge's item handler capability
+                final net.minecraft.world.level.block.entity.ChestBlockEntity chest = (net.minecraft.world.level.block.entity.ChestBlockEntity) level.getBlockEntity(chestPos);
+                chest.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
+                    for (int i = 0; i < inv.getContainerSize(); i++) {
+                        ItemStack stack = inv.getItem(i);
+                        if (stack.isEmpty()) continue;
+
+                        Item item = stack.getItem();
+                        int keep = getKeepAmount(item);
+
+                        // Only deposit if we have more than the keep amount (e.g., more than 8 seeds or any wheat)
+                        if (stack.getCount() > keep) {
+                            // Special check: Only one stack (64) of seeds allowed in the chest
+                            if (isSeed(item) && countInHandler(handler, item) >= 64) {
+                                continue;
+                            }
+
+                            int toDeposit = stack.getCount() - keep;
+                            ItemStack depositStack = stack.split(toDeposit);
+                            ItemStack leftover = net.minecraftforge.items.ItemHandlerHelper.insertItemStacked(handler, depositStack, false);
+
+                            // Return anything that couldn't fit in the chest to the villager
+                            stack.grow(leftover.getCount());
+                        }
+                    }
+                });
+                villager.swing(InteractionHand.MAIN_HAND);
+            }
+        }
+    }
+
+    // Helper to count items already in the chest
+    private static int countInHandler(net.minecraftforge.items.IItemHandler handler, Item item) {
+        int total = 0;
+        for (int i = 0; i < handler.getSlots(); i++) {
+            ItemStack stack = handler.getStackInSlot(i);
+            if (stack.is(item)) {
+                total += stack.getCount();
+            }
+        }
+        return total;
+    }
+
+    @SubscribeEvent
+    public static void onVillagerTick(LivingEvent.LivingTickEvent event) {
+        if (event.getEntity() instanceof Villager villager && !villager.level().isClientSide) {
+            if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
+                ServerLevel level = (ServerLevel) villager.level();
+                if (!canVillageExpand(level, villager.blockPosition())) {
+                    preventFoodWaste(villager);
                 }
             }
         }
@@ -98,8 +202,6 @@ public class FarmerAutomationHandler {
         // they stop the 'ShareFood' AI task from triggering.
         if (villager.getInventory().countItem(Items.BREAD) > 0 ||
                 villager.getInventory().countItem(Items.CARROT) > 0) {
-            // Logic: The farmer keeps the items in their 8-slot inventory
-            // for the player to collect instead of throwing them on the ground.
         }
     }
 
@@ -112,7 +214,6 @@ public class FarmerAutomationHandler {
                 if (level >= 2) {
                     searchAndHarvest(villager, level);
                 }
-                deliverToButcher(villager);
             }
         }
     }
@@ -170,66 +271,6 @@ public class FarmerAutomationHandler {
         level.destroyBlock(pos, false); // false = don't drop items on ground
     }
 
-    private static void performHarvest(ServerLevel level, Villager villager, BlockPos pos) {
-        // Swing arm animation
-        villager.swing(InteractionHand.MAIN_HAND);
-
-        // Break the block and drop items (Villagers naturally pick up food/crops)
-        level.destroyBlock(pos, true, villager);
-
-        // Move villager slightly toward the block to simulate them working
-        villager.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 0.5D);
-    }
-
-    private static void deliverToButcher(Villager farmer) {
-        // Find butchers within 8 blocks
-        List<Villager> nearbyButchers = farmer.level().getEntitiesOfClass(Villager.class,
-                farmer.getBoundingBox().inflate(8),
-                v -> v.getVillagerData().getProfession() == VillagerProfession.BUTCHER);
-
-        for (Villager butcher : nearbyButchers) {
-            SimpleContainer farmerInv = farmer.getInventory();
-            SimpleContainer butcherInv = butcher.getInventory();
-
-            Item[] feedItems = {Items.WHEAT, Items.CARROT, Items.WHEAT_SEEDS, Items.PUMPKIN_SEEDS, Items.MELON_SEEDS};
-
-            for (Item item : feedItems) {
-                int count = farmerInv.countItem(item);
-                if (count > 0) {
-                    int toGive = Math.min(count, 8);
-                    farmerInv.removeItemType(item, toGive);
-                    butcherInv.addItem(new ItemStack(item, toGive));
-
-                    // Show green particles to signify the trade
-                    ((ServerLevel)farmer.level()).sendParticles(ParticleTypes.HAPPY_VILLAGER,
-                            butcher.getX(), butcher.getY() + 1.5, butcher.getZ(), 5, 0.2, 0.2, 0.2, 0.05);
-                    return;
-                }
-            }
-        }
-    }
-
-    @SubscribeEvent
-    public static void onDiligenceTick(LivingEvent.LivingTickEvent event) {
-        if (event.getEntity() instanceof Villager villager && !villager.level().isClientSide) {
-            if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
-
-                // PRIORITY 1: Harvesting and Replanting
-                // This returns true if the farmer found work to do in the fields
-                boolean busyFarming = performDiligentFarming(villager);
-
-                // PRIORITY 2: Composting
-                // Only run the composter logic if the farmer isn't currently busy harvesting
-                // and actually has excess seeds to deal with.
-                if (!busyFarming) {
-                    checkComposter(villager);
-                }
-
-                // PRIORITY 3: Trading & Leveling
-                processAutoTrade(villager);
-            }
-        }
-    }
 
     private static void checkComposter(Villager villager) {
         ServerLevel level = (ServerLevel) villager.level();
@@ -237,7 +278,7 @@ public class FarmerAutomationHandler {
 
         int seedCount = inv.countItem(Items.WHEAT_SEEDS);
 
-        if (seedCount > 64) {
+        if (seedCount > 8) {
             BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE)
                     .map(GlobalPos::pos).orElse(null);
 
@@ -359,5 +400,22 @@ public class FarmerAutomationHandler {
         if (crop == Blocks.POTATOES) return Items.POTATO;
         if (crop == Blocks.BEETROOTS) return Items.BEETROOT_SEEDS;
         return Items.AIR;
+    }
+
+    private static int getKeepAmount(Item item) {
+        // Keep exactly 8 of these for replanting
+        if (item == Items.WHEAT_SEEDS || item == Items.BEETROOT_SEEDS ||
+                item == Items.CARROT || item == Items.POTATO) {
+            return 8;
+        }
+
+        // Everything else (Wheat, Pumpkin, Melon, Beetroot) keep amount is 0
+        return 0;
+    }
+
+    private static boolean isSeed(Item item) {
+        // Only these items will be capped at 64 in the chest
+        return item == Items.WHEAT_SEEDS || item == Items.BEETROOT_SEEDS ||
+                item == Items.PUMPKIN_SEEDS || item == Items.MELON_SEEDS;
     }
 }
