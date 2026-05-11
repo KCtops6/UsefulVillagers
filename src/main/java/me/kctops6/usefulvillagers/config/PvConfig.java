@@ -9,6 +9,9 @@ public class PvConfig {
     public static final ForgeConfigSpec.IntValue ITEM_THRESHOLD;
     public static final ForgeConfigSpec.DoubleValue XP_MULTIPLIER;
     public static final ForgeConfigSpec.IntValue HARVEST_RANGE;
+    public static final ForgeConfigSpec.DoubleValue HARVEST_REACH = BUILDER
+            .comment("The reach distance for a villager to harvest a crop (Player reach is ~4.5)")
+            .defineInRange("harvestReach", 4.5, 1.0, 10.0);
 
     static {
         BUILDER.push("Farmer Automation Settings");
@@ -18,6 +21,7 @@ public class PvConfig {
                 .defineInRange("xpMultiplier", 0.5, 0.0, 10.0);
         HARVEST_RANGE = BUILDER.comment("How far from their workstation farmers can look for pumpkins/melons")
                 .defineInRange("harvestRange", 10, 1, 32);
+
         BUILDER.pop();
         SPEC = BUILDER.build();
     }
