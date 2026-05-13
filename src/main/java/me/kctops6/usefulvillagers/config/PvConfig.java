@@ -12,6 +12,12 @@ public class PvConfig {
     public static final ForgeConfigSpec.DoubleValue HARVEST_REACH = BUILDER
             .comment("The reach distance for a villager to harvest a crop (Player reach is ~4.5)")
             .defineInRange("harvestReach", 4.5, 1.0, 10.0);
+    public static final ForgeConfigSpec.BooleanValue SHEPHERD_NEEDS_SHEARS = BUILDER
+            .comment("If true, the shepherd must have shears in his inventory to shear sheep.")
+            .define("shepherdNeedsShears", true);
+    public static final ForgeConfigSpec.DoubleValue SHEPHERD_REACH = BUILDER
+            .comment("The reach distance for a shepherd to shear a sheep.")
+            .defineInRange("shepherdReach", 4.5, 1.0, 10.0);
 
     static {
         BUILDER.push("Farmer Automation Settings");
