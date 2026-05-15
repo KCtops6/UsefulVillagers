@@ -33,28 +33,40 @@ public class FarmerAutomationHandler {
 
         if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
 
-            // Priority 1: Standard Farming (Harvest/Replant)
+            // Prevent standard vanilla sharing if under 8 items
+            restrictSharing(villager);
+
             boolean performedAction = performDiligentFarming(villager);
 
-            // NEW Priority 2: Specialty Crops (Melons/Pumpkins)
-            // Checking this earlier ensures Level 2+ farmers prioritize these over logistics
-            if (!performedAction) {
-                int level = villager.getVillagerData().getLevel();
-                if (level >= 2) {
-                    performedAction = searchAndHarvestSpecialty(villager, level);
-                }
-            }
-
-            // Priority 3: Logistics (Bone Meal, Compost, Deposit)
             if (!performedAction) {
                 performedAction = useInventoryBoneMeal(villager) ||
                         checkComposter(villager) ||
                         depositSurplus(villager);
-            }
 
-            // IDLE BEHAVIOR: Stand by workstation if no work exists
-            if (!performedAction) {
-                goToWorkstation(villager);
+                if (!performedAction) {
+                    int level = villager.getVillagerData().getLevel();
+                    if (level >= 2) {
+                        performedAction = searchAndHarvestSpecialty(villager, level);
+                    }
+                }
+
+                if (!performedAction) {
+                    goToWorkstation(villager);
+                }
+            }
+        }
+    }
+
+    private static void restrictSharing(Villager villager) {
+        // We override the behavior that allows villagers to share food by checking inventory counts
+        SimpleContainer inv = villager.getInventory();
+        Item[] foodItems = {Items.BREAD, Items.CARROT, Items.POTATO, Items.BEETROOT};
+
+        for (Item item : foodItems) {
+            int count = inv.countItem(item);
+            // If they have 8 or less, we ensure they don't have a "wants to share" state
+            if (count <= 8) {
+                villager.getBrain().eraseMemory(MemoryModuleType.INTERACTION_TARGET);
             }
         }
     }
@@ -63,7 +75,6 @@ public class FarmerAutomationHandler {
         villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(globalPos -> {
             BlockPos workPos = globalPos.pos();
             double distSq = villager.blockPosition().distSqr(workPos);
-
             if (distSq > 1.5) {
                 villager.getNavigation().moveTo(workPos.getX(), workPos.getY(), workPos.getZ(), 0.5D);
             } else {
@@ -78,7 +89,6 @@ public class FarmerAutomationHandler {
         if (inv.countItem(Items.BONE_MEAL) > 0) {
             BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE)
                     .map(GlobalPos::pos).orElse(villager.blockPosition());
-
             applyBoneMealToNearbyCrops(villager, workPos);
             inv.removeItemType(Items.BONE_MEAL, 1);
             villager.swing(InteractionHand.MAIN_HAND);
@@ -233,8 +243,6 @@ public class FarmerAutomationHandler {
     private static boolean moveAndAction(Villager villager, BlockPos target) {
         double reach = PvConfig.HARVEST_REACH.get();
         double distSq = villager.blockPosition().distSqr(target);
-
-        // Villager reaches crop if within the configured reach distance
         if (distSq > (reach * reach)) {
             villager.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 0.6D);
             return false;
@@ -258,7 +266,6 @@ public class FarmerAutomationHandler {
     }
 
     private static int getKeepAmount(Item item) {
-        // Keeps 8 of each seed/replantable crop, 0 for all harvested products
         return (item == Items.WHEAT_SEEDS || item == Items.BEETROOT_SEEDS || item == Items.CARROT || item == Items.POTATO) ? 8 : 0;
     }
 

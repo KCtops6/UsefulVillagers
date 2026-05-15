@@ -18,7 +18,18 @@ public class PvConfig {
     public static final ForgeConfigSpec.DoubleValue SHEPHERD_REACH = BUILDER
             .comment("The reach distance for a shepherd to shear a sheep.")
             .defineInRange("shepherdReach", 4.5, 1.0, 10.0);
+    public static final ForgeConfigSpec.IntValue GLOBAL_ANIMAL_LIMIT = BUILDER
+            .comment("Global limit for animal species before a butcher starts harvesting (Default: 3)")
+            .defineInRange("globalAnimalLimit", 3, 2, 20);
 
+    public static final ForgeConfigSpec.IntValue COW_LIMIT = BUILDER.defineInRange("cowLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue SHEEP_LIMIT = BUILDER.defineInRange("sheepLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue PIG_LIMIT = BUILDER.defineInRange("pigLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue CHICKEN_LIMIT = BUILDER.defineInRange("chickenLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue RABBIT_LIMIT = BUILDER.defineInRange("rabbitLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.BooleanValue BUTCHER_NEEDS_WEAPON = BUILDER
+            .comment("If true, butchers must possess a sword or axe to slaughter animals. (Default: true)")
+            .define("butcherNeedsWeapon", true);
     static {
         BUILDER.push("Farmer Automation Settings");
         ITEM_THRESHOLD = BUILDER.comment("Items needed for auto-trade (Default 64)")
@@ -31,4 +42,6 @@ public class PvConfig {
         BUILDER.pop();
         SPEC = BUILDER.build();
     }
+
+
 }

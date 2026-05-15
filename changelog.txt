@@ -1,3 +1,13 @@
+TODO
+Butcher should collect eggs
+Butcher should gather cooked meat if he has a fire aspect weapon
+Fisherman should catch fish, more water blocks within the range of the workstation, the better loot and quicker catches
+Any jobless villager can be a miner, you have him mine out a chunk by "selecting" it with
+
+1.20.1-1.3
+Butcher villagers breed and farm animals
+
+-
 1.20.1-1.2
 Shepherd villagers shear sheep
 They need shears by default, but that property is configurable
