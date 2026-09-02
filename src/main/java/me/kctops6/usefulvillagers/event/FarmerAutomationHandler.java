@@ -17,23 +17,36 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ComposterBlock;
 import net.minecraft.world.level.block.CropBlock;
+import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.event.entity.living.LivingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.items.IItemHandler;
+import net.minecraftforge.items.ItemHandlerHelper;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 @Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
 public class FarmerAutomationHandler {
+
+    // Simple cache to prevent scanning blocks around workstations every tick
+    private static final Map<UUID, BlockPos> CHEST_CACHE = new HashMap<>();
+    private static final Map<UUID, Long> CACHE_EXPIRATION = new HashMap<>();
+    private static final long CACHE_TTL_TICKS = 600; // Recalculate nearby chest every 30 seconds
 
     @SubscribeEvent
     public static void onDiligenceTick(LivingEvent.LivingTickEvent event) {
         if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
 
-        if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
+        // Spread out tick processing using entity ID offset
+        if ((villager.tickCount + villager.getId()) % 20 != 0) return;
 
-            // Prevent standard vanilla sharing if under 8 items
+        if (villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
+
             restrictSharing(villager);
 
             boolean performedAction = performDiligentFarming(villager);
@@ -58,13 +71,11 @@ public class FarmerAutomationHandler {
     }
 
     private static void restrictSharing(Villager villager) {
-        // We override the behavior that allows villagers to share food by checking inventory counts
         SimpleContainer inv = villager.getInventory();
         Item[] foodItems = {Items.BREAD, Items.CARROT, Items.POTATO, Items.BEETROOT};
 
         for (Item item : foodItems) {
             int count = inv.countItem(item);
-            // If they have 8 or less, we ensure they don't have a "wants to share" state
             if (count <= 8) {
                 villager.getBrain().eraseMemory(MemoryModuleType.INTERACTION_TARGET);
             }
@@ -158,35 +169,51 @@ public class FarmerAutomationHandler {
         BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
         if (workPos == null) return false;
 
-        BlockPos chestPos = null;
-        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
-            if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
-                chestPos = pos.immutable();
-                break;
-            }
-        }
+        BlockPos chestPos = getCachedChestPos(level, villager.getUUID(), workPos);
 
         if (chestPos != null) {
             if (moveAndAction(villager, chestPos)) {
-                final net.minecraft.world.level.block.entity.ChestBlockEntity chest = (net.minecraft.world.level.block.entity.ChestBlockEntity) level.getBlockEntity(chestPos);
-                chest.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
-                    for (int i = 0; i < inv.getContainerSize(); i++) {
-                        ItemStack stack = inv.getItem(i);
-                        if (stack.isEmpty()) continue;
-                        int keep = getKeepAmount(stack.getItem());
-                        if (stack.getCount() > keep) {
-                            if (isSeed(stack.getItem()) && countInHandler(handler, stack.getItem()) >= 64) continue;
-                            ItemStack depositStack = stack.split(stack.getCount() - keep);
-                            ItemStack leftover = net.minecraftforge.items.ItemHandlerHelper.insertItemStacked(handler, depositStack, false);
-                            stack.grow(leftover.getCount());
+                if (level.getBlockEntity(chestPos) instanceof ChestBlockEntity chest) {
+                    chest.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
+                        for (int i = 0; i < inv.getContainerSize(); i++) {
+                            ItemStack stack = inv.getItem(i);
+                            if (stack.isEmpty()) continue;
+                            int keep = getKeepAmount(stack.getItem());
+                            if (stack.getCount() > keep) {
+                                if (isSeed(stack.getItem()) && countInHandler(handler, stack.getItem()) >= 64) continue;
+                                ItemStack depositStack = stack.split(stack.getCount() - keep);
+                                ItemStack leftover = ItemHandlerHelper.insertItemStacked(handler, depositStack, false);
+                                stack.grow(leftover.getCount());
+                            }
                         }
-                    }
-                });
-                villager.swing(InteractionHand.MAIN_HAND);
+                    });
+                    villager.swing(InteractionHand.MAIN_HAND);
+                } else {
+                    // Invalidate cache if chest was destroyed
+                    CHEST_CACHE.remove(villager.getUUID());
+                }
             }
             return true;
         }
         return false;
+    }
+
+    private static BlockPos getCachedChestPos(ServerLevel level, UUID id, BlockPos workPos) {
+        long currentTick = level.getGameTime();
+        if (CHEST_CACHE.containsKey(id) && CACHE_EXPIRATION.getOrDefault(id, 0L) > currentTick) {
+            return CHEST_CACHE.get(id);
+        }
+
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
+            if (level.getBlockEntity(pos) instanceof ChestBlockEntity) {
+                BlockPos found = pos.immutable();
+                CHEST_CACHE.put(id, found);
+                CACHE_EXPIRATION.put(id, currentTick + CACHE_TTL_TICKS);
+                return found;
+            }
+        }
+        CHEST_CACHE.remove(id);
+        return null;
     }
 
     private static boolean searchAndHarvestSpecialty(Villager villager, int level) {
@@ -273,7 +300,7 @@ public class FarmerAutomationHandler {
         return item == Items.WHEAT_SEEDS || item == Items.BEETROOT_SEEDS || item == Items.PUMPKIN_SEEDS || item == Items.MELON_SEEDS;
     }
 
-    private static int countInHandler(net.minecraftforge.items.IItemHandler handler, Item item) {
+    private static int countInHandler(IItemHandler handler, Item item) {
         int total = 0;
         for (int i = 0; i < handler.getSlots(); i++) {
             ItemStack s = handler.getStackInSlot(i);
