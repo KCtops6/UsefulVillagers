@@ -1,7 +1,7 @@
 package me.kctops6.usefulvillagers.screen;
 
-import me.kctops6.usefulvillagers.ProductiveVillagers;
 import com.mojang.blaze3d.systems.RenderSystem;
+import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.menu.VillagerInventoryMenu;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -11,11 +11,11 @@ import net.minecraft.world.entity.player.Inventory;
 
 public class VillagerInventoryScreen extends AbstractContainerScreen<VillagerInventoryMenu> {
     private static final ResourceLocation TEXTURE =
-            new ResourceLocation(ProductiveVillagers.MODID, "textures/gui/villager_inventory.png");
+            new ResourceLocation(UsefulVillagers.MODID, "textures/gui/villager_inventory.png");
 
     public VillagerInventoryScreen(VillagerInventoryMenu menu, Inventory playerInv, Component title) {
         super(menu, playerInv, title);
-        this.imageHeight = 133; // Adjusted for a smaller GUI
+        this.imageHeight = 133;
         this.inventoryLabelY = this.imageHeight - 94;
     }
 
