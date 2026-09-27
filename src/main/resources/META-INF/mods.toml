@@ -3,22 +3,22 @@ loaderVersion="[47,)"
 license="MIT"
 
 [[mods]]
-modId="productivevillagers"
-version="1.4"
-displayName="Productive Villagers"
-authors="kctops6"
+modId="usefulvillagers"
+version="1.5.1"
+displayName="Useful Villagers"
+authors="KCtops6"
 description='''
-Makes villagers more useful by allowing manual inventory management.
+Makes villagers more useful by allowing manual inventory management and automated task handling.
 '''
 
-[[dependencies.productivevillagers]]
+[[dependencies.usefulvillagers]]
 modId="forge"
 mandatory=true
 versionRange="[47,)"
 ordering="NONE"
 side="BOTH"
 
-[[dependencies.productivevillagers]]
+[[dependencies.usefulvillagers]]
 modId="minecraft"
 mandatory=true
 versionRange="[1.20.1]"
