@@ -1,6 +1,6 @@
 package me.kctops6.usefulvillagers.event;
 
-import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.config.PvConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
@@ -30,19 +30,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-@Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
+@Mod.EventBusSubscriber(modid = UsefulVillagers.MODID)
 public class FarmerAutomationHandler {
 
-    // Simple cache to prevent scanning blocks around workstations every tick
     private static final Map<UUID, BlockPos> CHEST_CACHE = new HashMap<>();
     private static final Map<UUID, Long> CACHE_EXPIRATION = new HashMap<>();
-    private static final long CACHE_TTL_TICKS = 600; // Recalculate nearby chest every 30 seconds
+    private static final long CACHE_TTL_TICKS = 600;
 
     @SubscribeEvent
     public static void onDiligenceTick(LivingEvent.LivingTickEvent event) {
         if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
 
-        // Spread out tick processing using entity ID offset
         if ((villager.tickCount + villager.getId()) % 20 != 0) return;
 
         if (villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
@@ -85,8 +83,7 @@ public class FarmerAutomationHandler {
     private static void goToWorkstation(Villager villager) {
         villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(globalPos -> {
             BlockPos workPos = globalPos.pos();
-            double distSq = villager.blockPosition().distSqr(workPos);
-            if (distSq > 1.5) {
+            if (villager.blockPosition().distSqr(workPos) > 2.25) {
                 villager.getNavigation().moveTo(workPos.getX(), workPos.getY(), workPos.getZ(), 0.5D);
             } else {
                 villager.getNavigation().stop();
@@ -100,15 +97,16 @@ public class FarmerAutomationHandler {
         if (inv.countItem(Items.BONE_MEAL) > 0) {
             BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE)
                     .map(GlobalPos::pos).orElse(villager.blockPosition());
-            applyBoneMealToNearbyCrops(villager, workPos);
-            inv.removeItemType(Items.BONE_MEAL, 1);
-            villager.swing(InteractionHand.MAIN_HAND);
-            return true;
+            if (applyBoneMealToNearbyCrops(villager, workPos)) {
+                inv.removeItemType(Items.BONE_MEAL, 1);
+                villager.swing(InteractionHand.MAIN_HAND);
+                return true;
+            }
         }
         return false;
     }
 
-    private static void applyBoneMealToNearbyCrops(Villager villager, BlockPos workPos) {
+    private static boolean applyBoneMealToNearbyCrops(Villager villager, BlockPos workPos) {
         ServerLevel level = (ServerLevel) villager.level();
         int range = PvConfig.HARVEST_RANGE.get();
         BlockPos targetCrop = null;
@@ -131,31 +129,36 @@ public class FarmerAutomationHandler {
 
         if (targetCrop != null && moveAndAction(villager, targetCrop)) {
             ItemStack fakeBoneMeal = new ItemStack(Items.BONE_MEAL);
-            if (net.minecraft.world.item.BoneMealItem.applyBonemeal(fakeBoneMeal, level, targetCrop, null)) {
-                level.levelEvent(2005, targetCrop, 0);
-            }
+            return net.minecraft.world.item.BoneMealItem.applyBonemeal(fakeBoneMeal, level, targetCrop, null);
         }
+        return false;
     }
 
     private static boolean checkComposter(Villager villager) {
         ServerLevel level = (ServerLevel) villager.level();
         SimpleContainer inv = villager.getInventory();
-        if (inv.countItem(Items.WHEAT_SEEDS) > 8) {
-            BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
-            if (workPos != null && level.getBlockState(workPos).is(Blocks.COMPOSTER)) {
+
+        BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos != null && level.getBlockState(workPos).is(Blocks.COMPOSTER)) {
+            BlockState state = level.getBlockState(workPos);
+            int fillLevel = state.getValue(ComposterBlock.LEVEL);
+
+            if (fillLevel >= 7) {
                 if (moveAndAction(villager, workPos)) {
-                    BlockState state = level.getBlockState(workPos);
-                    int fillLevel = state.getValue(ComposterBlock.LEVEL);
-                    if (fillLevel < 7) {
-                        inv.removeItemType(Items.WHEAT_SEEDS, 1);
-                        if (level.random.nextFloat() < 0.3F) {
-                            level.setBlock(workPos, state.setValue(ComposterBlock.LEVEL, fillLevel + 1), 3);
-                        }
-                    } else {
-                        level.setBlock(workPos, state.setValue(ComposterBlock.LEVEL, 0), 3);
-                        inv.addItem(new ItemStack(Items.BONE_MEAL));
+                    level.setBlock(workPos, state.setValue(ComposterBlock.LEVEL, 0), 3);
+                    inv.addItem(new ItemStack(Items.BONE_MEAL));
+                    villager.swing(InteractionHand.MAIN_HAND);
+                    return true;
+                }
+                return true;
+            } else if (inv.countItem(Items.WHEAT_SEEDS) > 8) {
+                if (moveAndAction(villager, workPos)) {
+                    inv.removeItemType(Items.WHEAT_SEEDS, 1);
+                    if (level.random.nextFloat() < 0.3F) {
+                        level.setBlock(workPos, state.setValue(ComposterBlock.LEVEL, fillLevel + 1), 3);
                     }
                     villager.swing(InteractionHand.MAIN_HAND);
+                    return true;
                 }
                 return true;
             }
@@ -189,7 +192,6 @@ public class FarmerAutomationHandler {
                     });
                     villager.swing(InteractionHand.MAIN_HAND);
                 } else {
-                    // Invalidate cache if chest was destroyed
                     CHEST_CACHE.remove(villager.getUUID());
                 }
             }
@@ -269,8 +271,7 @@ public class FarmerAutomationHandler {
 
     private static boolean moveAndAction(Villager villager, BlockPos target) {
         double reach = PvConfig.HARVEST_REACH.get();
-        double distSq = villager.blockPosition().distSqr(target);
-        if (distSq > (reach * reach)) {
+        if (villager.blockPosition().distSqr(target) > (reach * reach)) {
             villager.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 0.6D);
             return false;
         }
