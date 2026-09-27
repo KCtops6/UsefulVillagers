@@ -1,6 +1,6 @@
 package me.kctops6.usefulvillagers.event;
 
-import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.config.PvConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
@@ -26,10 +26,8 @@ import net.minecraftforge.items.ItemHandlerHelper;
 
 import java.util.List;
 
-@Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
+@Mod.EventBusSubscriber(modid = UsefulVillagers.MODID)
 public class ButcherAutomationHandler {
-
-    private static final int WORK_RADIUS = 60;
 
     @SubscribeEvent
     public static void onButcherTick(LivingEvent.LivingTickEvent event) {
@@ -38,25 +36,24 @@ public class ButcherAutomationHandler {
 
         if (villager.level().isNight()) return;
 
+        // Pickup drops spawned from previous kills before processing new tasks
+        collectNearbyDrops(villager);
+
         int level = villager.getVillagerData().getLevel();
         boolean performedAction = false;
 
-        // 1. Check if we need food and restock if possible
         if (needsBreedingMaterials(villager)) {
             performedAction = restockFromFarmerStorage(villager);
         }
 
-        // 2. Manage Animals (Breeding and Slaughtering)
         if (!performedAction) {
             performedAction = manageAnimals(villager, level);
         }
 
-        // 3. Deposit finished products
         if (!performedAction) {
             performedAction = depositProducts(villager);
         }
 
-        // 4. Return to workstation if idle
         if (!performedAction) {
             goToWorkstation(villager);
         }
@@ -67,7 +64,8 @@ public class ButcherAutomationHandler {
         if (workPos == null) return false;
 
         ServerLevel levelObj = (ServerLevel) butcher.level();
-        AABB area = new AABB(workPos).inflate(WORK_RADIUS);
+        int workRadius = PvConfig.HARVEST_RANGE.get() * 2;
+        AABB area = new AABB(workPos).inflate(workRadius);
 
         Class<? extends Animal>[] targets = (level >= 3)
                 ? new Class[]{Cow.class, Sheep.class, Pig.class, Chicken.class, Rabbit.class}
@@ -77,23 +75,18 @@ public class ButcherAutomationHandler {
             List<? extends Animal> population = levelObj.getEntitiesOfClass(species, area);
             int limit = getLimitForSpecies(species);
 
-            // --- SLAUGHTER LOGIC ---
             boolean needsWeapon = PvConfig.BUTCHER_NEEDS_WEAPON.get();
             if (population.size() > limit && (!needsWeapon || isHoldingWeapon(butcher))) {
                 Animal victim = population.stream().filter(a -> !a.isBaby()).findFirst().orElse(null);
                 if (victim != null) {
-                    if (!moveAndInteract(butcher, victim)) return true; // Moving to target
+                    if (!moveAndInteract(butcher, victim)) return true;
 
                     victim.hurt(butcher.damageSources().mobAttack(butcher), 100F);
                     if (needsWeapon) consumeWeaponDurability(butcher);
-                    collectNearbyDrops(butcher);
                     butcher.swing(InteractionHand.MAIN_HAND);
                     return true;
                 }
-            }
-
-            // --- BREEDING LOGIC (BED REQUIREMENT REMOVED) ---
-            else if (population.size() >= 2 && population.size() < limit) {
+            } else if (population.size() >= 2 && population.size() < limit) {
                 Item food = getFoodForSpecies(species);
                 if (butcher.getInventory().countItem(food) < 1) continue;
 
@@ -108,7 +101,7 @@ public class ButcherAutomationHandler {
                         butcher.swing(InteractionHand.MAIN_HAND);
                         return true;
                     }
-                    return true; // Return true to keep pathing to this animal
+                    return true;
                 }
             }
         }
@@ -133,9 +126,9 @@ public class ButcherAutomationHandler {
 
     private static boolean moveAndInteract(Villager butcher, Object target) {
         BlockPos pos = (target instanceof LivingEntity e) ? e.blockPosition() : (BlockPos) target;
-        double distSq = butcher.blockPosition().distSqr(pos);
+        double reach = PvConfig.HARVEST_REACH.get();
 
-        if (distSq > 4.5) { // Interaction range
+        if (butcher.blockPosition().distSqr(pos) > (reach * reach)) {
             butcher.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 0.6D);
             return false;
         }
@@ -149,7 +142,8 @@ public class ButcherAutomationHandler {
         BlockPos currentPos = butcher.blockPosition();
         BlockPos farmerWorkstation = null;
 
-        for (BlockPos pos : BlockPos.betweenClosed(currentPos.offset(-25, -3, -25), currentPos.offset(25, 3, 25))) {
+        int range = PvConfig.HARVEST_RANGE.get();
+        for (BlockPos pos : BlockPos.betweenClosed(currentPos.offset(-range, -3, -range), currentPos.offset(range, 3, range))) {
             if (level.getBlockState(pos).is(Blocks.COMPOSTER)) {
                 farmerWorkstation = pos.immutable();
                 break;
@@ -164,12 +158,14 @@ public class ButcherAutomationHandler {
                 if (!moveAndInteract(butcher, pos)) return true;
 
                 IItemHandler handler = be.getCapability(ForgeCapabilities.ITEM_HANDLER).orElse(null);
-                Item[] needed = {Items.CARROT, Items.POTATO, Items.WHEAT, Items.WHEAT_SEEDS};
-                for (Item item : needed) {
-                    int has = butcher.getInventory().countItem(item);
-                    if (has < 12) withdrawItem(butcher, handler, item, 12 - has);
+                if (handler != null) {
+                    Item[] needed = {Items.CARROT, Items.POTATO, Items.WHEAT, Items.WHEAT_SEEDS};
+                    for (Item item : needed) {
+                        int has = butcher.getInventory().countItem(item);
+                        if (has < 12) withdrawItem(butcher, handler, item, 12 - has);
+                    }
+                    butcher.swing(InteractionHand.MAIN_HAND);
                 }
-                butcher.swing(InteractionHand.MAIN_HAND);
                 return true;
             }
         }
@@ -186,14 +182,16 @@ public class ButcherAutomationHandler {
                 if (!moveAndInteract(butcher, pos)) return true;
 
                 IItemHandler handler = be.getCapability(ForgeCapabilities.ITEM_HANDLER).orElse(null);
-                SimpleContainer inv = butcher.getInventory();
-                for (int i = 0; i < inv.getContainerSize(); i++) {
-                    ItemStack stack = inv.getItem(i);
-                    if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
-                        inv.setItem(i, ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false));
+                if (handler != null) {
+                    SimpleContainer inv = butcher.getInventory();
+                    for (int i = 0; i < inv.getContainerSize(); i++) {
+                        ItemStack stack = inv.getItem(i);
+                        if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
+                            inv.setItem(i, ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false));
+                        }
                     }
+                    butcher.swing(InteractionHand.MAIN_HAND);
                 }
-                butcher.swing(InteractionHand.MAIN_HAND);
                 return true;
             }
         }
@@ -238,7 +236,7 @@ public class ButcherAutomationHandler {
 
     private static void goToWorkstation(Villager villager) {
         villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(gp -> {
-            if (villager.blockPosition().distSqr(gp.pos()) > 4) {
+            if (villager.blockPosition().distSqr(gp.pos()) > 2.25) {
                 villager.getNavigation().moveTo(gp.pos().getX(), gp.pos().getY(), gp.pos().getZ(), 0.5D);
             }
         });
