@@ -1,6 +1,6 @@
 package me.kctops6.usefulvillagers.network;
 
-import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.UsefulVillagers;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
@@ -15,7 +15,7 @@ public class PacketHandler {
     }
 
     public static final SimpleChannel INSTANCE = NetworkRegistry.newSimpleChannel(
-            new ResourceLocation(ProductiveVillagers.MODID, "main"),
+            new ResourceLocation(UsefulVillagers.MODID, "main"),
             () -> PROTOCOL_VERSION,
             PROTOCOL_VERSION::equals,
             PROTOCOL_VERSION::equals
@@ -26,7 +26,7 @@ public class PacketHandler {
     }
 
     public static void register() {
-        ProductiveVillagers.LOGGER.info("Registering network channel...");
+        UsefulVillagers.LOGGER.info("Registering network channel...");
 
         INSTANCE.messageBuilder(OpenVillagerInvPacket.class, id(), NetworkDirection.PLAY_TO_SERVER)
                 .encoder(OpenVillagerInvPacket::encode)
