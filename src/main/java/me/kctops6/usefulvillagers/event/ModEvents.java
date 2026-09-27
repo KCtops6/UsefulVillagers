@@ -1,6 +1,6 @@
 package me.kctops6.usefulvillagers.event;
 
-import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.client.ModKeyBindings;
 import me.kctops6.usefulvillagers.network.OpenVillagerInvPacket;
 import me.kctops6.usefulvillagers.network.PacketHandler;
@@ -23,7 +23,7 @@ import net.minecraftforge.fml.common.Mod;
 
 public class ModEvents {
 
-    @Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
+    @Mod.EventBusSubscriber(modid = UsefulVillagers.MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
     public static class ClientModBusEvents {
         @SubscribeEvent
         public static void registerKeys(RegisterKeyMappingsEvent event) {
@@ -31,7 +31,7 @@ public class ModEvents {
         }
     }
 
-    @Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID, value = Dist.CLIENT)
+    @Mod.EventBusSubscriber(modid = UsefulVillagers.MODID, value = Dist.CLIENT)
     public static class ClientForgeEvents {
 
         @SubscribeEvent
@@ -50,23 +50,8 @@ public class ModEvents {
                 int x = merchantScreen.getGuiLeft() + merchantScreen.getXSize() + 4;
                 int y = merchantScreen.getGuiTop() + 4;
 
-                Button chestButton = new Button.Builder(Component.empty(), btn -> {
-                    Minecraft mc = Minecraft.getInstance();
-                    if (mc.crosshairPickEntity instanceof AbstractVillager villager) {
-                        PacketHandler.sendToServer(new OpenVillagerInvPacket(villager.getId()));
-                    }
-                })
-                        .bounds(x, y, 20, 20)
-                        .createNarration(supplier -> Component.empty())
-                        .build();
-
-                // Custom button subclass that renders the normal widget frame + chest item icon on top
-                event.addListener(new Button(
-                        chestButton.getX(),
-                        chestButton.getY(),
-                        chestButton.getWidth(),
-                        chestButton.getHeight(),
-                        chestButton.getMessage(),
+                Button chestButton = new Button(
+                        x, y, 20, 20, Component.empty(),
                         btn -> {
                             Minecraft mc = Minecraft.getInstance();
                             if (mc.crosshairPickEntity instanceof AbstractVillager villager) {
@@ -80,7 +65,9 @@ public class ModEvents {
                         super.renderWidget(graphics, mouseX, mouseY, partialTick);
                         graphics.renderItem(new ItemStack(Items.CHEST), getX() + 2, getY() + 2);
                     }
-                });
+                };
+
+                event.addListener(chestButton);
             }
         }
     }
