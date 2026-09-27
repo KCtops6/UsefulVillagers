@@ -1,10 +1,11 @@
 package me.kctops6.usefulvillagers.event;
 
-import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.config.PvConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
@@ -17,12 +18,11 @@ import net.minecraft.world.phys.AABB;
 import net.minecraftforge.event.entity.living.LivingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.items.IItemHandler;
 import net.minecraftforge.items.ItemHandlerHelper;
 
 import java.util.List;
 
-@Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
+@Mod.EventBusSubscriber(modid = UsefulVillagers.MODID)
 public class ShepherdAutomationHandler {
 
     @SubscribeEvent
@@ -44,7 +44,6 @@ public class ShepherdAutomationHandler {
     }
 
     private static boolean tryShearingSheep(Villager villager) {
-        // Check for shears requirement
         if (PvConfig.SHEPHERD_NEEDS_SHEARS.get() && villager.getInventory().countItem(Items.SHEARS) <= 0) {
             return false;
         }
@@ -60,17 +59,14 @@ public class ShepherdAutomationHandler {
         if (!sheepList.isEmpty()) {
             Sheep target = sheepList.get(0);
             if (moveAndAction(villager, target.blockPosition())) {
-                // Perform the shearing
                 villager.swing(InteractionHand.MAIN_HAND);
 
-                // Use the sheep's built-on onSheared method to ensure vanilla drop rates (1-3 wool)
                 List<ItemStack> drops = target.onSheared(null, ItemStack.EMPTY, level, target.blockPosition(), 0);
                 for (ItemStack stack : drops) {
                     ItemStack leftover = villager.getInventory().addItem(stack);
                     if (!leftover.isEmpty()) target.spawnAtLocation(leftover);
                 }
 
-                // Handle Shear durability if required
                 if (PvConfig.SHEPHERD_NEEDS_SHEARS.get()) {
                     damageShears(villager);
                 }
@@ -98,10 +94,9 @@ public class ShepherdAutomationHandler {
         ServerLevel level = (ServerLevel) villager.level();
         SimpleContainer inv = villager.getInventory();
 
-        // Only move to chest if we actually have wool
         boolean hasWool = false;
-        for(int i = 0; i < inv.getContainerSize(); i++) {
-            if (inv.getItem(i).getItem().getDescriptionId().contains("wool")) {
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            if (inv.getItem(i).is(ItemTags.WOOL)) {
                 hasWool = true;
                 break;
             }
@@ -125,7 +120,7 @@ public class ShepherdAutomationHandler {
                 chest.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
                     for (int i = 0; i < inv.getContainerSize(); i++) {
                         ItemStack stack = inv.getItem(i);
-                        if (!stack.isEmpty() && stack.getItem().getDescriptionId().contains("wool")) {
+                        if (!stack.isEmpty() && stack.is(ItemTags.WOOL)) {
                             ItemStack leftover = ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false);
                             stack.setCount(leftover.getCount());
                         }
@@ -140,9 +135,7 @@ public class ShepherdAutomationHandler {
 
     private static boolean moveAndAction(Villager villager, BlockPos target) {
         double reach = PvConfig.SHEPHERD_REACH.get();
-        double distSq = villager.blockPosition().distSqr(target);
-
-        if (distSq > (reach * reach)) {
+        if (villager.blockPosition().distSqr(target) > (reach * reach)) {
             villager.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 0.5D);
             return false;
         }
@@ -153,7 +146,7 @@ public class ShepherdAutomationHandler {
     private static void goToWorkstation(Villager villager) {
         villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(globalPos -> {
             BlockPos workPos = globalPos.pos();
-            if (villager.blockPosition().distSqr(workPos) > 1.5) {
+            if (villager.blockPosition().distSqr(workPos) > 2.25) {
                 villager.getNavigation().moveTo(workPos.getX(), workPos.getY(), workPos.getZ(), 0.5D);
             } else {
                 villager.getNavigation().stop();
