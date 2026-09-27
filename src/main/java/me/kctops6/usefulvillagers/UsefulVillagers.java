@@ -16,31 +16,27 @@ import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-@Mod(ProductiveVillagers.MODID)
-public class ProductiveVillagers {
-    public static final String MODID = "productivevillagers";
+@Mod(UsefulVillagers.MODID)
+public class UsefulVillagers {
+    public static final String MODID = "usefulvillagers";
     public static final Logger LOGGER = LogManager.getLogger();
 
-    public ProductiveVillagers() {
+    public UsefulVillagers() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
-        // 1. Initialize Network properly via PacketHandler
         PacketHandler.register();
 
-        // 2. Register Config and Menus
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, PvConfig.SPEC);
         ModMenus.MENUS.register(modEventBus);
 
-        // 3. Register Lifecycle Listeners
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::clientSetup);
 
-        // 4. Register Gameplay Events
         MinecraftForge.EVENT_BUS.register(this);
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
-        LOGGER.info("Productive Villagers Common Setup");
+        LOGGER.info("Useful Villagers Common Setup");
     }
 
     private void clientSetup(final FMLClientSetupEvent event) {
