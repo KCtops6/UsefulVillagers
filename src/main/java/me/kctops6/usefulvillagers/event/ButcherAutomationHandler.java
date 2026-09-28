@@ -7,6 +7,7 @@ import net.minecraft.core.GlobalPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.minecraft.world.entity.animal.*;
@@ -36,22 +37,23 @@ public class ButcherAutomationHandler {
 
         if (villager.level().isNight()) return;
 
-        // Pickup drops spawned from previous kills before processing new tasks
+        // Pickup drops spawned from kills before processing new tasks
         collectNearbyDrops(villager);
 
         int level = villager.getVillagerData().getLevel();
         boolean performedAction = false;
 
-        if (needsBreedingMaterials(villager)) {
+        // PRIORITIZE DEPOSITING: Clean out inventory before slaughtering/breeding
+        if (hasProductsToDeposit(villager)) {
+            performedAction = depositProducts(villager);
+        }
+
+        if (!performedAction && needsBreedingMaterials(villager)) {
             performedAction = restockFromFarmerStorage(villager);
         }
 
         if (!performedAction) {
             performedAction = manageAnimals(villager, level);
-        }
-
-        if (!performedAction) {
-            performedAction = depositProducts(villager);
         }
 
         if (!performedAction) {
@@ -62,6 +64,11 @@ public class ButcherAutomationHandler {
     private static boolean manageAnimals(Villager butcher, int level) {
         BlockPos workPos = butcher.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
         if (workPos == null) return false;
+
+        // FULL INVENTORY GUARD: Stop hunting if butcher inventory has no empty slots
+        if (!hasInventorySpace(butcher)) {
+            return false;
+        }
 
         ServerLevel levelObj = (ServerLevel) butcher.level();
         int workRadius = PvConfig.HARVEST_RANGE.get() * 2;
@@ -81,9 +88,15 @@ public class ButcherAutomationHandler {
                 if (victim != null) {
                     if (!moveAndInteract(butcher, victim)) return true;
 
-                    victim.hurt(butcher.damageSources().mobAttack(butcher), 100F);
+                    // Deal lethal damage so the mob plays its visible death animation
+                    DamageSource source = butcher.damageSources().mobAttack(butcher);
+                    victim.hurt(source, Float.MAX_VALUE);
+
                     if (needsWeapon) consumeWeaponDurability(butcher);
                     butcher.swing(InteractionHand.MAIN_HAND);
+
+                    // Collect drops immediately if close enough
+                    collectNearbyDrops(butcher);
                     return true;
                 }
             } else if (population.size() >= 2 && population.size() < limit) {
@@ -108,6 +121,27 @@ public class ButcherAutomationHandler {
         return false;
     }
 
+    private static boolean hasInventorySpace(Villager butcher) {
+        SimpleContainer inv = butcher.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            if (inv.getItem(i).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasProductsToDeposit(Villager butcher) {
+        SimpleContainer inv = butcher.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static void consumeWeaponDurability(Villager butcher) {
         SimpleContainer inv = butcher.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {
@@ -125,6 +159,8 @@ public class ButcherAutomationHandler {
     }
 
     private static boolean moveAndInteract(Villager butcher, Object target) {
+        butcher.getBrain().eraseMemory(MemoryModuleType.INTERACTION_TARGET);
+
         BlockPos pos = (target instanceof LivingEntity e) ? e.blockPosition() : (BlockPos) target;
         double reach = PvConfig.HARVEST_REACH.get();
 
@@ -199,7 +235,7 @@ public class ButcherAutomationHandler {
     }
 
     private static void collectNearbyDrops(Villager butcher) {
-        AABB area = butcher.getBoundingBox().inflate(2.5);
+        AABB area = butcher.getBoundingBox().inflate(3.5);
         List<ItemEntity> items = butcher.level().getEntitiesOfClass(ItemEntity.class, area);
         for (ItemEntity item : items) {
             ItemStack leftover = butcher.getInventory().addItem(item.getItem());
