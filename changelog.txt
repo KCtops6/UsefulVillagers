@@ -1,8 +1,5 @@
-TODO
-Butcher should collect eggs
-Butcher should gather cooked meat if he has a fire aspect weapon
-Fisherman should catch fish, more water blocks within the range of the workstation, the better loot and quicker catches
-Any jobless villager can be a miner, you have him mine out a chunk by "selecting" it with
+1.20.1-1.8.1
+Butcher, Farmer, and Shepherd are able to sleep.
 
 1.20.1-1.4
 Changed the way to open a villager's inventory from shift right click to a configurable key bind ('V' by default) to prevent conflicts with mods like "Easy Villagers"

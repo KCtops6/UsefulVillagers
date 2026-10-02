@@ -35,7 +35,7 @@ public class ButcherAutomationHandler {
         if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
         if (villager.tickCount % 20 != 0 || villager.getVillagerData().getProfession() != VillagerProfession.BUTCHER) return;
 
-        if (villager.level().isNight()) return;
+        if (villager.level().isNight() || villager.isSleeping()) return;
 
         // Pickup drops spawned from kills before processing new tasks
         collectNearbyDrops(villager);

@@ -28,48 +28,32 @@ public class ShepherdAutomationHandler {
     @SubscribeEvent
     public static void onShepherdTick(LivingEvent.LivingTickEvent event) {
         if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
-
+        if (villager.level().isNight() || villager.isSleeping()) return;
         if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.SHEPHERD) {
-
             boolean performedAction = tryShearingSheep(villager);
-
-            if (!performedAction) {
-                performedAction = depositWool(villager);
-            }
-
-            if (!performedAction) {
-                goToWorkstation(villager);
-            }
+            if (!performedAction) performedAction = depositWool(villager);
+            if (!performedAction) goToWorkstation(villager);
         }
     }
 
     private static boolean tryShearingSheep(Villager villager) {
-        if (PvConfig.SHEPHERD_NEEDS_SHEARS.get() && villager.getInventory().countItem(Items.SHEARS) <= 0) {
-            return false;
-        }
-
+        if (PvConfig.SHEPHERD_NEEDS_SHEARS.get() && villager.getInventory().countItem(Items.SHEARS) <= 0) return false;
         ServerLevel level = (ServerLevel) villager.level();
         BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
         if (workPos == null) return false;
-
         int range = PvConfig.HARVEST_RANGE.get();
         AABB area = new AABB(workPos).inflate(range);
         List<Sheep> sheepList = level.getEntitiesOfClass(Sheep.class, area, sheep -> sheep.readyForShearing() && !sheep.isBaby());
-
         if (!sheepList.isEmpty()) {
             Sheep target = sheepList.get(0);
             if (moveAndAction(villager, target.blockPosition())) {
                 villager.swing(InteractionHand.MAIN_HAND);
-
                 List<ItemStack> drops = target.onSheared(null, ItemStack.EMPTY, level, target.blockPosition(), 0);
                 for (ItemStack stack : drops) {
                     ItemStack leftover = villager.getInventory().addItem(stack);
                     if (!leftover.isEmpty()) target.spawnAtLocation(leftover);
                 }
-
-                if (PvConfig.SHEPHERD_NEEDS_SHEARS.get()) {
-                    damageShears(villager);
-                }
+                if (PvConfig.SHEPHERD_NEEDS_SHEARS.get()) damageShears(villager);
             }
             return true;
         }
@@ -82,9 +66,7 @@ public class ShepherdAutomationHandler {
             ItemStack stack = inv.getItem(i);
             if (stack.is(Items.SHEARS)) {
                 stack.setDamageValue(stack.getDamageValue() + 1);
-                if (stack.getDamageValue() >= stack.getMaxDamage()) {
-                    stack.shrink(1);
-                }
+                if (stack.getDamageValue() >= stack.getMaxDamage()) stack.shrink(1);
                 break;
             }
         }
@@ -93,7 +75,6 @@ public class ShepherdAutomationHandler {
     private static boolean depositWool(Villager villager) {
         ServerLevel level = (ServerLevel) villager.level();
         SimpleContainer inv = villager.getInventory();
-
         boolean hasWool = false;
         for (int i = 0; i < inv.getContainerSize(); i++) {
             if (inv.getItem(i).is(ItemTags.WOOL)) {
@@ -102,10 +83,8 @@ public class ShepherdAutomationHandler {
             }
         }
         if (!hasWool) return false;
-
         BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
         if (workPos == null) return false;
-
         BlockPos chestPos = null;
         for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
             if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
@@ -113,10 +92,10 @@ public class ShepherdAutomationHandler {
                 break;
             }
         }
-
         if (chestPos != null) {
             if (moveAndAction(villager, chestPos)) {
                 final net.minecraft.world.level.block.entity.ChestBlockEntity chest = (net.minecraft.world.level.block.entity.ChestBlockEntity) level.getBlockEntity(chestPos);
+                assert chest != null;
                 chest.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
                     for (int i = 0; i < inv.getContainerSize(); i++) {
                         ItemStack stack = inv.getItem(i);

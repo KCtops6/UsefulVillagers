@@ -40,30 +40,22 @@ public class FarmerAutomationHandler {
     @SubscribeEvent
     public static void onDiligenceTick(LivingEvent.LivingTickEvent event) {
         if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
-
         if ((villager.tickCount + villager.getId()) % 20 != 0) return;
-
+        if (villager.level().isNight() || villager.isSleeping()) return;
         if (villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
-
             restrictSharing(villager);
-
             boolean performedAction = performDiligentFarming(villager);
-
             if (!performedAction) {
                 performedAction = useInventoryBoneMeal(villager) ||
                         checkComposter(villager) ||
                         depositSurplus(villager);
-
                 if (!performedAction) {
                     int level = villager.getVillagerData().getLevel();
                     if (level >= 2) {
                         performedAction = searchAndHarvestSpecialty(villager, level);
                     }
                 }
-
-                if (!performedAction) {
-                    goToWorkstation(villager);
-                }
+                if (!performedAction) goToWorkstation(villager);
             }
         }
     }

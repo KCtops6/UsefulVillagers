@@ -1,0 +1,1170 @@
+package me.kctops6.usefulvillagers.client;
+
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.KeyMapping;
+import net.minecraftforge.client.settings.KeyConflictContext;
+import org.lwjgl.glfw.GLFW;
+
+public class ModKeyBindings {
+    public static final String CATEGORY = "key.categories.productivevillagers";
+
+    public static final KeyMapping VILLAGER_INV_KEY = new KeyMapping(
+            "key.productivevillagers.open_inventory",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_V, // Default key is 'V'
+            CATEGORY
+    );
+}
+
+package me.kctops6.usefulvillagers.config;
+
+import net.minecraftforge.common.ForgeConfigSpec;
+
+public class PvConfig {
+    public static final ForgeConfigSpec.Builder BUILDER = new ForgeConfigSpec.Builder();
+    public static final ForgeConfigSpec SPEC;
+
+    public static final ForgeConfigSpec.IntValue ITEM_THRESHOLD;
+    public static final ForgeConfigSpec.DoubleValue XP_MULTIPLIER;
+    public static final ForgeConfigSpec.IntValue HARVEST_RANGE;
+    public static final ForgeConfigSpec.DoubleValue HARVEST_REACH = BUILDER
+            .comment("The reach distance for a villager to harvest a crop (Player reach is ~4.5)")
+            .defineInRange("harvestReach", 4.5, 1.0, 10.0);
+    public static final ForgeConfigSpec.BooleanValue SHEPHERD_NEEDS_SHEARS = BUILDER
+            .comment("If true, the shepherd must have shears in his inventory to shear sheep.")
+            .define("shepherdNeedsShears", true);
+    public static final ForgeConfigSpec.DoubleValue SHEPHERD_REACH = BUILDER
+            .comment("The reach distance for a shepherd to shear a sheep.")
+            .defineInRange("shepherdReach", 4.5, 1.0, 10.0);
+    public static final ForgeConfigSpec.IntValue GLOBAL_ANIMAL_LIMIT = BUILDER
+            .comment("Global limit for animal species before a butcher starts harvesting (Default: 3)")
+            .defineInRange("globalAnimalLimit", 3, 2, 20);
+
+    public static final ForgeConfigSpec.IntValue COW_LIMIT = BUILDER.defineInRange("cowLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue SHEEP_LIMIT = BUILDER.defineInRange("sheepLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue PIG_LIMIT = BUILDER.defineInRange("pigLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue CHICKEN_LIMIT = BUILDER.defineInRange("chickenLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.IntValue RABBIT_LIMIT = BUILDER.defineInRange("rabbitLimit", 3, 2, 20);
+    public static final ForgeConfigSpec.BooleanValue BUTCHER_NEEDS_WEAPON = BUILDER
+            .comment("If true, butchers must possess a sword or axe to slaughter animals. (Default: true)")
+            .define("butcherNeedsWeapon", true);
+    static {
+        BUILDER.push("Farmer Automation Settings");
+        ITEM_THRESHOLD = BUILDER.comment("Items needed for auto-trade (Default 64)")
+                .defineInRange("itemThreshold", 64, 1, 640);
+        XP_MULTIPLIER = BUILDER.comment("XP Gained multiplier (0.5 = 50%)")
+                .defineInRange("xpMultiplier", 0.5, 0.0, 10.0);
+        HARVEST_RANGE = BUILDER.comment("How far from their workstation farmers can look for pumpkins/melons")
+                .defineInRange("harvestRange", 10, 1, 32);
+
+        BUILDER.pop();
+        SPEC = BUILDER.build();
+    }
+
+
+}
+
+package me.kctops6.usefulvillagers.event;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.config.PvConfig;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.GlobalPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.animal.*;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.npc.VillagerProfession;
+import net.minecraft.world.item.*;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.phys.AABB;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
+import net.minecraftforge.event.entity.living.LivingEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.items.IItemHandler;
+import net.minecraftforge.items.ItemHandlerHelper;
+
+import java.util.List;
+
+@Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
+public class ButcherAutomationHandler {
+
+    private static final int WORK_RADIUS = 60;
+
+    @SubscribeEvent
+    public static void onButcherTick(LivingEvent.LivingTickEvent event) {
+        if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
+        if (villager.tickCount % 20 != 0 || villager.getVillagerData().getProfession() != VillagerProfession.BUTCHER) return;
+
+        if (villager.level().isNight()) return;
+
+        int level = villager.getVillagerData().getLevel();
+        boolean performedAction = false;
+
+        // 1. Check if we need food and restock if possible
+        if (needsBreedingMaterials(villager)) {
+            performedAction = restockFromFarmerStorage(villager);
+        }
+
+        // 2. Manage Animals (Breeding and Slaughtering)
+        if (!performedAction) {
+            performedAction = manageAnimals(villager, level);
+        }
+
+        // 3. Deposit finished products
+        if (!performedAction) {
+            performedAction = depositProducts(villager);
+        }
+
+        // 4. Return to workstation if idle
+        if (!performedAction) {
+            goToWorkstation(villager);
+        }
+    }
+
+    private static boolean manageAnimals(Villager butcher, int level) {
+        BlockPos workPos = butcher.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return false;
+
+        ServerLevel levelObj = (ServerLevel) butcher.level();
+        AABB area = new AABB(workPos).inflate(WORK_RADIUS);
+
+        Class<? extends Animal>[] targets = (level >= 3)
+                ? new Class[]{Cow.class, Sheep.class, Pig.class, Chicken.class, Rabbit.class}
+                : new Class[]{Pig.class, Chicken.class, Rabbit.class};
+
+        for (Class<? extends Animal> species : targets) {
+            List<? extends Animal> population = levelObj.getEntitiesOfClass(species, area);
+            int limit = getLimitForSpecies(species);
+
+            // --- SLAUGHTER LOGIC ---
+            boolean needsWeapon = PvConfig.BUTCHER_NEEDS_WEAPON.get();
+            if (population.size() > limit && (!needsWeapon || isHoldingWeapon(butcher))) {
+                Animal victim = population.stream().filter(a -> !a.isBaby()).findFirst().orElse(null);
+                if (victim != null) {
+                    if (!moveAndInteract(butcher, victim)) return true; // Moving to target
+
+                    victim.hurt(butcher.damageSources().mobAttack(butcher), 100F);
+                    if (needsWeapon) consumeWeaponDurability(butcher);
+                    collectNearbyDrops(butcher);
+                    butcher.swing(InteractionHand.MAIN_HAND);
+                    return true;
+                }
+            }
+
+            // --- BREEDING LOGIC (BED REQUIREMENT REMOVED) ---
+            else if (population.size() >= 2 && population.size() < limit) {
+                Item food = getFoodForSpecies(species);
+                if (butcher.getInventory().countItem(food) < 1) continue;
+
+                Animal parent = population.stream()
+                        .filter(a -> a.getAge() == 0 && !a.isInLove() && a.canFallInLove())
+                        .findFirst().orElse(null);
+
+                if (parent != null) {
+                    if (moveAndInteract(butcher, parent)) {
+                        butcher.getInventory().removeItemType(food, 1);
+                        parent.setInLove(null);
+                        butcher.swing(InteractionHand.MAIN_HAND);
+                        return true;
+                    }
+                    return true; // Return true to keep pathing to this animal
+                }
+            }
+        }
+        return false;
+    }
+
+    private static void consumeWeaponDurability(Villager butcher) {
+        SimpleContainer inv = butcher.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.getItem() instanceof SwordItem || stack.getItem() instanceof AxeItem) {
+                if (stack.isDamageableItem()) {
+                    stack.setDamageValue(stack.getDamageValue() + 1);
+                    if (stack.getDamageValue() >= stack.getMaxDamage()) {
+                        stack.shrink(1);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    private static boolean moveAndInteract(Villager butcher, Object target) {
+        BlockPos pos = (target instanceof LivingEntity e) ? e.blockPosition() : (BlockPos) target;
+        double distSq = butcher.blockPosition().distSqr(pos);
+
+        if (distSq > 4.5) { // Interaction range
+            butcher.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 0.6D);
+            return false;
+        }
+
+        butcher.getNavigation().stop();
+        return true;
+    }
+
+    private static boolean restockFromFarmerStorage(Villager butcher) {
+        ServerLevel level = (ServerLevel) butcher.level();
+        BlockPos currentPos = butcher.blockPosition();
+        BlockPos farmerWorkstation = null;
+
+        for (BlockPos pos : BlockPos.betweenClosed(currentPos.offset(-25, -3, -25), currentPos.offset(25, 3, 25))) {
+            if (level.getBlockState(pos).is(Blocks.COMPOSTER)) {
+                farmerWorkstation = pos.immutable();
+                break;
+            }
+        }
+
+        if (farmerWorkstation == null) return false;
+
+        for (BlockPos pos : BlockPos.betweenClosed(farmerWorkstation.offset(-3, -1, -3), farmerWorkstation.offset(3, 1, 3))) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) {
+                if (!moveAndInteract(butcher, pos)) return true;
+
+                IItemHandler handler = be.getCapability(ForgeCapabilities.ITEM_HANDLER).orElse(null);
+                Item[] needed = {Items.CARROT, Items.POTATO, Items.WHEAT, Items.WHEAT_SEEDS};
+                for (Item item : needed) {
+                    int has = butcher.getInventory().countItem(item);
+                    if (has < 12) withdrawItem(butcher, handler, item, 12 - has);
+                }
+                butcher.swing(InteractionHand.MAIN_HAND);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean depositProducts(Villager butcher) {
+        BlockPos workPos = butcher.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return false;
+
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
+            BlockEntity be = butcher.level().getBlockEntity(pos);
+            if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) {
+                if (!moveAndInteract(butcher, pos)) return true;
+
+                IItemHandler handler = be.getCapability(ForgeCapabilities.ITEM_HANDLER).orElse(null);
+                SimpleContainer inv = butcher.getInventory();
+                for (int i = 0; i < inv.getContainerSize(); i++) {
+                    ItemStack stack = inv.getItem(i);
+                    if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
+                        inv.setItem(i, ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false));
+                    }
+                }
+                butcher.swing(InteractionHand.MAIN_HAND);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void collectNearbyDrops(Villager butcher) {
+        AABB area = butcher.getBoundingBox().inflate(2.5);
+        List<ItemEntity> items = butcher.level().getEntitiesOfClass(ItemEntity.class, area);
+        for (ItemEntity item : items) {
+            ItemStack leftover = butcher.getInventory().addItem(item.getItem());
+            item.setItem(leftover);
+            if (leftover.isEmpty()) item.discard();
+        }
+    }
+
+    private static void withdrawItem(Villager butcher, IItemHandler handler, Item item, int amountNeeded) {
+        int taken = 0;
+        for (int i = 0; i < handler.getSlots(); i++) {
+            if (handler.getStackInSlot(i).is(item)) {
+                ItemStack extracted = handler.extractItem(i, amountNeeded - taken, false);
+                butcher.getInventory().addItem(extracted);
+                taken += extracted.getCount();
+                if (taken >= amountNeeded) break;
+            }
+        }
+    }
+
+    private static boolean needsBreedingMaterials(Villager butcher) {
+        SimpleContainer inv = butcher.getInventory();
+        return inv.countItem(Items.CARROT) < 4 || inv.countItem(Items.POTATO) < 4 || inv.countItem(Items.WHEAT) < 4 || inv.countItem(Items.WHEAT_SEEDS) < 4;
+    }
+
+    private static boolean isHoldingWeapon(Villager butcher) {
+        SimpleContainer inv = butcher.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            Item item = inv.getItem(i).getItem();
+            if (item instanceof SwordItem || item instanceof AxeItem) return true;
+        }
+        return false;
+    }
+
+    private static void goToWorkstation(Villager villager) {
+        villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(gp -> {
+            if (villager.blockPosition().distSqr(gp.pos()) > 4) {
+                villager.getNavigation().moveTo(gp.pos().getX(), gp.pos().getY(), gp.pos().getZ(), 0.5D);
+            }
+        });
+    }
+
+    private static int getLimitForSpecies(Class<? extends Animal> species) {
+        if (species == Cow.class) return PvConfig.COW_LIMIT.get();
+        if (species == Sheep.class) return PvConfig.SHEEP_LIMIT.get();
+        if (species == Pig.class) return PvConfig.PIG_LIMIT.get();
+        if (species == Chicken.class) return PvConfig.CHICKEN_LIMIT.get();
+        if (species == Rabbit.class) return PvConfig.RABBIT_LIMIT.get();
+        return PvConfig.GLOBAL_ANIMAL_LIMIT.get();
+    }
+
+    private static Item getFoodForSpecies(Class<? extends Animal> species) {
+        if (species == Cow.class || species == Sheep.class) return Items.WHEAT;
+        if (species == Pig.class) return Items.CARROT;
+        if (species == Chicken.class) return Items.WHEAT_SEEDS;
+        if (species == Rabbit.class) return Items.CARROT;
+        return Items.AIR;
+    }
+
+    private static boolean isBreedingItem(Item item) {
+        return item == Items.WHEAT || item == Items.WHEAT_SEEDS || item == Items.CARROT || item == Items.POTATO || item == Items.BEETROOT;
+    }
+}
+
+package me.kctops6.usefulvillagers.event;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.config.PvConfig;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.GlobalPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.npc.VillagerProfession;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ComposterBlock;
+import net.minecraft.world.level.block.CropBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraftforge.event.entity.living.LivingEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+
+import java.util.List;
+
+@Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
+public class FarmerAutomationHandler {
+
+    @SubscribeEvent
+    public static void onDiligenceTick(LivingEvent.LivingTickEvent event) {
+        if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
+
+        if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
+
+            // Prevent standard vanilla sharing if under 8 items
+            restrictSharing(villager);
+
+            boolean performedAction = performDiligentFarming(villager);
+
+            if (!performedAction) {
+                performedAction = useInventoryBoneMeal(villager) ||
+                        checkComposter(villager) ||
+                        depositSurplus(villager);
+
+                if (!performedAction) {
+                    int level = villager.getVillagerData().getLevel();
+                    if (level >= 2) {
+                        performedAction = searchAndHarvestSpecialty(villager, level);
+                    }
+                }
+
+                if (!performedAction) {
+                    goToWorkstation(villager);
+                }
+            }
+        }
+    }
+
+    private static void restrictSharing(Villager villager) {
+        // We override the behavior that allows villagers to share food by checking inventory counts
+        SimpleContainer inv = villager.getInventory();
+        Item[] foodItems = {Items.BREAD, Items.CARROT, Items.POTATO, Items.BEETROOT};
+
+        for (Item item : foodItems) {
+            int count = inv.countItem(item);
+            // If they have 8 or less, we ensure they don't have a "wants to share" state
+            if (count <= 8) {
+                villager.getBrain().eraseMemory(MemoryModuleType.INTERACTION_TARGET);
+            }
+        }
+    }
+
+    private static void goToWorkstation(Villager villager) {
+        villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(globalPos -> {
+            BlockPos workPos = globalPos.pos();
+            double distSq = villager.blockPosition().distSqr(workPos);
+            if (distSq > 1.5) {
+                villager.getNavigation().moveTo(workPos.getX(), workPos.getY(), workPos.getZ(), 0.5D);
+            } else {
+                villager.getNavigation().stop();
+                villager.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
+            }
+        });
+    }
+
+    private static boolean useInventoryBoneMeal(Villager villager) {
+        SimpleContainer inv = villager.getInventory();
+        if (inv.countItem(Items.BONE_MEAL) > 0) {
+            BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE)
+                    .map(GlobalPos::pos).orElse(villager.blockPosition());
+            applyBoneMealToNearbyCrops(villager, workPos);
+            inv.removeItemType(Items.BONE_MEAL, 1);
+            villager.swing(InteractionHand.MAIN_HAND);
+            return true;
+        }
+        return false;
+    }
+
+    private static void applyBoneMealToNearbyCrops(Villager villager, BlockPos workPos) {
+        ServerLevel level = (ServerLevel) villager.level();
+        int range = PvConfig.HARVEST_RANGE.get();
+        BlockPos targetCrop = null;
+        double lowestGrowthPercentage = 1.0;
+
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-range, -1, -range), workPos.offset(range, 1, range))) {
+            BlockState state = level.getBlockState(pos);
+            if (state.getBlock() instanceof CropBlock crop) {
+                int currentAge = crop.getAge(state);
+                int maxAge = crop.getMaxAge();
+                if (currentAge < maxAge) {
+                    double growthPercentage = (double) currentAge / maxAge;
+                    if (growthPercentage < lowestGrowthPercentage) {
+                        lowestGrowthPercentage = growthPercentage;
+                        targetCrop = pos.immutable();
+                    }
+                }
+            }
+        }
+
+        if (targetCrop != null && moveAndAction(villager, targetCrop)) {
+            ItemStack fakeBoneMeal = new ItemStack(Items.BONE_MEAL);
+            if (net.minecraft.world.item.BoneMealItem.applyBonemeal(fakeBoneMeal, level, targetCrop, null)) {
+                level.levelEvent(2005, targetCrop, 0);
+            }
+        }
+    }
+
+    private static boolean checkComposter(Villager villager) {
+        ServerLevel level = (ServerLevel) villager.level();
+        SimpleContainer inv = villager.getInventory();
+        if (inv.countItem(Items.WHEAT_SEEDS) > 8) {
+            BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+            if (workPos != null && level.getBlockState(workPos).is(Blocks.COMPOSTER)) {
+                if (moveAndAction(villager, workPos)) {
+                    BlockState state = level.getBlockState(workPos);
+                    int fillLevel = state.getValue(ComposterBlock.LEVEL);
+                    if (fillLevel < 7) {
+                        inv.removeItemType(Items.WHEAT_SEEDS, 1);
+                        if (level.random.nextFloat() < 0.3F) {
+                            level.setBlock(workPos, state.setValue(ComposterBlock.LEVEL, fillLevel + 1), 3);
+                        }
+                    } else {
+                        level.setBlock(workPos, state.setValue(ComposterBlock.LEVEL, 0), 3);
+                        inv.addItem(new ItemStack(Items.BONE_MEAL));
+                    }
+                    villager.swing(InteractionHand.MAIN_HAND);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean depositSurplus(Villager villager) {
+        ServerLevel level = (ServerLevel) villager.level();
+        SimpleContainer inv = villager.getInventory();
+        BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return false;
+
+        BlockPos chestPos = null;
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
+            if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
+                chestPos = pos.immutable();
+                break;
+            }
+        }
+
+        if (chestPos != null) {
+            if (moveAndAction(villager, chestPos)) {
+                final net.minecraft.world.level.block.entity.ChestBlockEntity chest = (net.minecraft.world.level.block.entity.ChestBlockEntity) level.getBlockEntity(chestPos);
+                chest.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
+                    for (int i = 0; i < inv.getContainerSize(); i++) {
+                        ItemStack stack = inv.getItem(i);
+                        if (stack.isEmpty()) continue;
+                        int keep = getKeepAmount(stack.getItem());
+                        if (stack.getCount() > keep) {
+                            if (isSeed(stack.getItem()) && countInHandler(handler, stack.getItem()) >= 64) continue;
+                            ItemStack depositStack = stack.split(stack.getCount() - keep);
+                            ItemStack leftover = net.minecraftforge.items.ItemHandlerHelper.insertItemStacked(handler, depositStack, false);
+                            stack.grow(leftover.getCount());
+                        }
+                    }
+                });
+                villager.swing(InteractionHand.MAIN_HAND);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean searchAndHarvestSpecialty(Villager villager, int level) {
+        ServerLevel serverLevel = (ServerLevel) villager.level();
+        BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return false;
+
+        int range = PvConfig.HARVEST_RANGE.get();
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-range, -1, -range), workPos.offset(range, 1, range))) {
+            BlockState state = serverLevel.getBlockState(pos);
+            boolean isPumpkin = (state.is(Blocks.PUMPKIN) && level >= 2);
+            boolean isMelon = (state.is(Blocks.MELON) && level >= 3);
+
+            if (isPumpkin || isMelon) {
+                if (moveAndAction(villager, pos)) {
+                    harvestToInventory(serverLevel, villager, pos, state);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void harvestToInventory(ServerLevel level, Villager villager, BlockPos pos, BlockState state) {
+        villager.swing(InteractionHand.MAIN_HAND);
+        List<ItemStack> drops = Block.getDrops(state, level, pos, null, villager, ItemStack.EMPTY);
+        for (ItemStack drop : drops) {
+            ItemStack leftover = villager.getInventory().addItem(drop);
+            if (!leftover.isEmpty()) Block.popResource(level, pos, leftover);
+        }
+        level.destroyBlock(pos, false);
+    }
+
+    private static boolean performDiligentFarming(Villager villager) {
+        ServerLevel level = (ServerLevel) villager.level();
+        BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return false;
+
+        int range = PvConfig.HARVEST_RANGE.get();
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-range, -1, -range), workPos.offset(range, 1, range))) {
+            BlockState state = level.getBlockState(pos);
+            if (state.getBlock() instanceof CropBlock crop && crop.isMaxAge(state)) {
+                if (moveAndAction(villager, pos)) {
+                    Block type = state.getBlock();
+                    harvestToInventory(level, villager, pos, state);
+                    replantSameCrop(level, pos, villager.getInventory(), type);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean moveAndAction(Villager villager, BlockPos target) {
+        double reach = PvConfig.HARVEST_REACH.get();
+        double distSq = villager.blockPosition().distSqr(target);
+        if (distSq > (reach * reach)) {
+            villager.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 0.6D);
+            return false;
+        }
+        villager.getNavigation().stop();
+        return true;
+    }
+
+    private static void replantSameCrop(ServerLevel level, BlockPos pos, SimpleContainer inv, Block oldCrop) {
+        Item seed = (oldCrop == Blocks.WHEAT) ? Items.WHEAT_SEEDS : (oldCrop == Blocks.CARROTS) ? Items.CARROT : (oldCrop == Blocks.POTATOES) ? Items.POTATO : (oldCrop == Blocks.BEETROOTS) ? Items.BEETROOT_SEEDS : Items.AIR;
+        if (seed != Items.AIR) {
+            for (int i = 0; i < inv.getContainerSize(); i++) {
+                ItemStack stack = inv.getItem(i);
+                if (stack.is(seed)) {
+                    level.setBlock(pos, oldCrop.defaultBlockState(), 3);
+                    stack.shrink(1);
+                    return;
+                }
+            }
+        }
+    }
+
+    private static int getKeepAmount(Item item) {
+        return (item == Items.WHEAT_SEEDS || item == Items.BEETROOT_SEEDS || item == Items.CARROT || item == Items.POTATO) ? 8 : 0;
+    }
+
+    private static boolean isSeed(Item item) {
+        return item == Items.WHEAT_SEEDS || item == Items.BEETROOT_SEEDS || item == Items.PUMPKIN_SEEDS || item == Items.MELON_SEEDS;
+    }
+
+    private static int countInHandler(net.minecraftforge.items.IItemHandler handler, Item item) {
+        int total = 0;
+        for (int i = 0; i < handler.getSlots(); i++) {
+            ItemStack s = handler.getStackInSlot(i);
+            if (s.is(item)) total += s.getCount();
+        }
+        return total;
+    }
+}
+
+package me.kctops6.usefulvillagers.event;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraftforge.event.level.BlockEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+
+@Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
+public class FarmProtectionHandler {
+
+    @SubscribeEvent
+    public static void onFarmlandTrample(BlockEvent.FarmlandTrampleEvent event) {
+        // Check if the entity causing the trample is a Villager
+        if (event.getEntity() instanceof Villager) {
+            // Cancel the event so the farmland remains intact
+            event.setCanceled(true);
+        }
+    }
+}
+
+package me.kctops6.usefulvillagers.event;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.client.ModKeyBindings;
+import me.kctops6.usefulvillagers.network.OpenVillagerInvPacket;
+import me.kctops6.usefulvillagers.network.PacketHandler;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.inventory.MerchantScreen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.npc.AbstractVillager;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.client.event.InputEvent;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
+import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+
+public class ModEvents {
+
+    @Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
+    public static class ClientModBusEvents {
+        @SubscribeEvent
+        public static void registerKeys(RegisterKeyMappingsEvent event) {
+            event.register(ModKeyBindings.VILLAGER_INV_KEY);
+        }
+    }
+
+    @Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID, value = Dist.CLIENT)
+    public static class ClientForgeEvents {
+
+        @SubscribeEvent
+        public static void onKeyInput(InputEvent.Key event) {
+            if (ModKeyBindings.VILLAGER_INV_KEY.consumeClick()) {
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.hitResult instanceof EntityHitResult hit && hit.getEntity() instanceof Villager villager) {
+                    PacketHandler.sendToServer(new OpenVillagerInvPacket(villager.getId()));
+                }
+            }
+        }
+
+        @SubscribeEvent
+        public static void onScreenInit(ScreenEvent.Init.Post event) {
+            if (event.getScreen() instanceof MerchantScreen merchantScreen) {
+                int x = merchantScreen.getGuiLeft() + merchantScreen.getXSize() + 4;
+                int y = merchantScreen.getGuiTop() + 4;
+
+                Button chestButton = new Button.Builder(Component.empty(), btn -> {
+                    Minecraft mc = Minecraft.getInstance();
+                    if (mc.crosshairPickEntity instanceof AbstractVillager villager) {
+                        PacketHandler.sendToServer(new OpenVillagerInvPacket(villager.getId()));
+                    }
+                })
+                        .bounds(x, y, 20, 20)
+                        .createNarration(supplier -> Component.empty())
+                        .build();
+
+                // Custom button subclass that renders the normal widget frame + chest item icon on top
+                event.addListener(new Button(
+                        chestButton.getX(),
+                        chestButton.getY(),
+                        chestButton.getWidth(),
+                        chestButton.getHeight(),
+                        chestButton.getMessage(),
+                        btn -> {
+                            Minecraft mc = Minecraft.getInstance();
+                            if (mc.crosshairPickEntity instanceof AbstractVillager villager) {
+                                PacketHandler.sendToServer(new OpenVillagerInvPacket(villager.getId()));
+                            }
+                        },
+                        supplier -> Component.empty()
+                ) {
+                    @Override
+                    public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+                        super.renderWidget(graphics, mouseX, mouseY, partialTick);
+                        graphics.renderItem(new ItemStack(Items.CHEST), getX() + 2, getY() + 2);
+                    }
+                });
+            }
+        }
+    }
+}
+
+package me.kctops6.usefulvillagers.event;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import me.kctops6.usefulvillagers.config.PvConfig;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.GlobalPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.animal.Sheep;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.npc.VillagerProfession;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.AABB;
+import net.minecraftforge.event.entity.living.LivingEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.items.IItemHandler;
+import net.minecraftforge.items.ItemHandlerHelper;
+
+import java.util.List;
+
+@Mod.EventBusSubscriber(modid = ProductiveVillagers.MODID)
+public class ShepherdAutomationHandler {
+
+    @SubscribeEvent
+    public static void onShepherdTick(LivingEvent.LivingTickEvent event) {
+        if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
+
+        if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.SHEPHERD) {
+
+            boolean performedAction = tryShearingSheep(villager);
+
+            if (!performedAction) {
+                performedAction = depositWool(villager);
+            }
+
+            if (!performedAction) {
+                goToWorkstation(villager);
+            }
+        }
+    }
+
+    private static boolean tryShearingSheep(Villager villager) {
+        // Check for shears requirement
+        if (PvConfig.SHEPHERD_NEEDS_SHEARS.get() && villager.getInventory().countItem(Items.SHEARS) <= 0) {
+            return false;
+        }
+
+        ServerLevel level = (ServerLevel) villager.level();
+        BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return false;
+
+        int range = PvConfig.HARVEST_RANGE.get();
+        AABB area = new AABB(workPos).inflate(range);
+        List<Sheep> sheepList = level.getEntitiesOfClass(Sheep.class, area, sheep -> sheep.readyForShearing() && !sheep.isBaby());
+
+        if (!sheepList.isEmpty()) {
+            Sheep target = sheepList.get(0);
+            if (moveAndAction(villager, target.blockPosition())) {
+                // Perform the shearing
+                villager.swing(InteractionHand.MAIN_HAND);
+
+                // Use the sheep's built-on onSheared method to ensure vanilla drop rates (1-3 wool)
+                List<ItemStack> drops = target.onSheared(null, ItemStack.EMPTY, level, target.blockPosition(), 0);
+                for (ItemStack stack : drops) {
+                    ItemStack leftover = villager.getInventory().addItem(stack);
+                    if (!leftover.isEmpty()) target.spawnAtLocation(leftover);
+                }
+
+                // Handle Shear durability if required
+                if (PvConfig.SHEPHERD_NEEDS_SHEARS.get()) {
+                    damageShears(villager);
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static void damageShears(Villager villager) {
+        SimpleContainer inv = villager.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.is(Items.SHEARS)) {
+                stack.setDamageValue(stack.getDamageValue() + 1);
+                if (stack.getDamageValue() >= stack.getMaxDamage()) {
+                    stack.shrink(1);
+                }
+                break;
+            }
+        }
+    }
+
+    private static boolean depositWool(Villager villager) {
+        ServerLevel level = (ServerLevel) villager.level();
+        SimpleContainer inv = villager.getInventory();
+
+        // Only move to chest if we actually have wool
+        boolean hasWool = false;
+        for(int i = 0; i < inv.getContainerSize(); i++) {
+            if (inv.getItem(i).getItem().getDescriptionId().contains("wool")) {
+                hasWool = true;
+                break;
+            }
+        }
+        if (!hasWool) return false;
+
+        BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
+        if (workPos == null) return false;
+
+        BlockPos chestPos = null;
+        for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
+            if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
+                chestPos = pos.immutable();
+                break;
+            }
+        }
+
+        if (chestPos != null) {
+            if (moveAndAction(villager, chestPos)) {
+                final net.minecraft.world.level.block.entity.ChestBlockEntity chest = (net.minecraft.world.level.block.entity.ChestBlockEntity) level.getBlockEntity(chestPos);
+                chest.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
+                    for (int i = 0; i < inv.getContainerSize(); i++) {
+                        ItemStack stack = inv.getItem(i);
+                        if (!stack.isEmpty() && stack.getItem().getDescriptionId().contains("wool")) {
+                            ItemStack leftover = ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false);
+                            stack.setCount(leftover.getCount());
+                        }
+                    }
+                });
+                villager.swing(InteractionHand.MAIN_HAND);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean moveAndAction(Villager villager, BlockPos target) {
+        double reach = PvConfig.SHEPHERD_REACH.get();
+        double distSq = villager.blockPosition().distSqr(target);
+
+        if (distSq > (reach * reach)) {
+            villager.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 0.5D);
+            return false;
+        }
+        villager.getNavigation().stop();
+        return true;
+    }
+
+    private static void goToWorkstation(Villager villager) {
+        villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(globalPos -> {
+            BlockPos workPos = globalPos.pos();
+            if (villager.blockPosition().distSqr(workPos) > 1.5) {
+                villager.getNavigation().moveTo(workPos.getX(), workPos.getY(), workPos.getZ(), 0.5D);
+            } else {
+                villager.getNavigation().stop();
+                villager.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
+            }
+        });
+    }
+}
+
+package me.kctops6.usefulvillagers.menu;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import net.minecraft.world.inventory.MenuType;
+import net.minecraftforge.common.extensions.IForgeMenuType;
+import net.minecraftforge.registries.DeferredRegister;
+import net.minecraftforge.registries.ForgeRegistries;
+import net.minecraftforge.registries.RegistryObject;
+
+public class ModMenus {
+    public static final DeferredRegister<MenuType<?>> MENUS =
+            DeferredRegister.create(ForgeRegistries.MENU_TYPES, ProductiveVillagers.MODID);
+
+    public static final RegistryObject<MenuType<VillagerInventoryMenu>> VILLAGER_INVENTORY_MENU =
+            MENUS.register("villager_inventory", () -> IForgeMenuType.create((windowId, inv, data) ->
+                    new VillagerInventoryMenu(windowId, inv)));
+}
+
+package me.kctops6.usefulvillagers.menu;
+
+import net.minecraft.world.Container;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
+
+public class VillagerInventoryMenu extends AbstractContainerMenu {
+    private final Container villagerInventory;
+
+    public VillagerInventoryMenu(int containerId, Inventory playerInventory) {
+        this(containerId, playerInventory, new SimpleContainer(8));
+    }
+
+    public VillagerInventoryMenu(int containerId, Inventory playerInventory, Container villagerInv) {
+        super(ModMenus.VILLAGER_INVENTORY_MENU.get(), containerId);
+        this.villagerInventory = villagerInv;
+
+        // 1. Villager Inventory Slots (8 slots in one row)
+        // Adjusted X to start at 17 to center 8 slots in the standard 176-wide GUI
+        for (int i = 0; i < 8; i++) {
+            this.addSlot(new Slot(villagerInventory, i, 17 + i * 18, 20));
+        }
+
+        // 2. Player Main Inventory (3 rows of 9)
+        // row * 18 ensures each row is shifted down by 18 pixels
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 9; col++) {
+                this.addSlot(new Slot(playerInventory, col + row * 9 + 9, 8 + col * 18, 51 + row * 18));
+            }
+        }
+
+        // 3. Player Hotbar (1 row of 9)
+        for (int col = 0; col < 9; col++) {
+            this.addSlot(new Slot(playerInventory, col, 8 + col * 18, 109));
+        }
+    }
+
+    @Override
+    public ItemStack quickMoveStack(Player player, int index) {
+        ItemStack itemstack = ItemStack.EMPTY;
+        Slot slot = this.slots.get(index);
+
+        if (slot != null && slot.hasItem()) {
+            ItemStack itemstack1 = slot.getItem();
+            itemstack = itemstack1.copy();
+
+            // If the item is in the Villager's inventory (0-7)
+            if (index < 8) {
+                // Try to move to player inventory (8-44)
+                if (!this.moveItemStackTo(itemstack1, 8, 44, true)) {
+                    return ItemStack.EMPTY;
+                }
+            }
+            // If the item is in the Player's inventory (8-44)
+            else {
+                // Try to move to villager inventory (0-8)
+                if (!this.moveItemStackTo(itemstack1, 0, 8, false)) {
+                    return ItemStack.EMPTY;
+                }
+            }
+
+            if (itemstack1.isEmpty()) {
+                slot.set(ItemStack.EMPTY);
+            } else {
+                slot.setChanged();
+            }
+        }
+        return itemstack;
+    }
+
+    @Override
+    public boolean stillValid(Player player) {
+        return true;
+    }
+}
+
+package me.kctops6.usefulvillagers.network;
+
+import me.kctops6.usefulvillagers.menu.VillagerInventoryMenu;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.SimpleMenuProvider;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraftforge.network.NetworkEvent;
+import net.minecraftforge.network.NetworkHooks;
+
+import java.util.function.Supplier;
+
+public class OpenVillagerInvPacket {
+    private final int entityId;
+
+    public OpenVillagerInvPacket(int entityId) {
+        this.entityId = entityId;
+    }
+
+    public static void encode(OpenVillagerInvPacket msg, FriendlyByteBuf buffer) {
+        buffer.writeInt(msg.entityId);
+    }
+
+    public static OpenVillagerInvPacket decode(FriendlyByteBuf buffer) {
+        return new OpenVillagerInvPacket(buffer.readInt());
+    }
+
+    public static void handle(OpenVillagerInvPacket msg, Supplier<NetworkEvent.Context> ctx) {
+        ctx.get().enqueueWork(() -> {
+            ServerPlayer player = ctx.get().getSender();
+            if (player != null && player.level().getEntity(msg.entityId) instanceof Villager villager) {
+                // Security check: only open if the player is close to the villager
+                if (player.distanceToSqr(villager) < 64.0) {
+                    NetworkHooks.openScreen(player, new SimpleMenuProvider(
+                            (id, inv, p) -> new VillagerInventoryMenu(id, inv, villager.getInventory()),
+                            Component.literal("Villager Inventory")
+                    ), (buf) -> {});
+                }
+            }
+        });
+        ctx.get().setPacketHandled(true);
+    }
+}
+
+package me.kctops6.usefulvillagers.network;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraftforge.network.NetworkDirection;
+import net.minecraftforge.network.NetworkRegistry;
+import net.minecraftforge.network.simple.SimpleChannel;
+
+public class PacketHandler {
+    private static final String PROTOCOL_VERSION = "1";
+    private static int packetId = 0;
+
+    private static int id() {
+        return packetId++;
+    }
+
+    public static final SimpleChannel INSTANCE = NetworkRegistry.newSimpleChannel(
+            new ResourceLocation(ProductiveVillagers.MODID, "main"),
+            () -> PROTOCOL_VERSION,
+            PROTOCOL_VERSION::equals,
+            PROTOCOL_VERSION::equals
+    );
+
+    public static <MSG> void sendToServer(MSG message) {
+        INSTANCE.sendToServer(message);
+    }
+
+    public static void register() {
+        ProductiveVillagers.LOGGER.info("Registering network channel...");
+
+        INSTANCE.messageBuilder(OpenVillagerInvPacket.class, id(), NetworkDirection.PLAY_TO_SERVER)
+                .encoder(OpenVillagerInvPacket::encode)
+                .decoder(OpenVillagerInvPacket::decode)
+                .consumerMainThread(OpenVillagerInvPacket::handle)
+                .add();
+    }
+}
+
+package me.kctops6.usefulvillagers.screen;
+
+import me.kctops6.usefulvillagers.ProductiveVillagers;
+import com.mojang.blaze3d.systems.RenderSystem;
+import me.kctops6.usefulvillagers.menu.VillagerInventoryMenu;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.player.Inventory;
+
+public class VillagerInventoryScreen extends AbstractContainerScreen<VillagerInventoryMenu> {
+    private static final ResourceLocation TEXTURE =
+            new ResourceLocation(ProductiveVillagers.MODID, "textures/gui/villager_inventory.png");
+
+    public VillagerInventoryScreen(VillagerInventoryMenu menu, Inventory playerInv, Component title) {
+        super(menu, playerInv, title);
+        this.imageHeight = 133; // Adjusted for a smaller GUI
+        this.inventoryLabelY = this.imageHeight - 94;
+    }
+
+    @Override
+    protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY) {
+        RenderSystem.setShaderTexture(0, TEXTURE);
+        int x = (width - imageWidth) / 2;
+        int y = (height - imageHeight) / 2;
+        graphics.blit(TEXTURE, x, y, 0, 0, imageWidth, imageHeight);
+    }
+
+    @Override
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+        renderBackground(graphics);
+        super.render(graphics, mouseX, mouseY, delta);
+        renderTooltip(graphics, mouseX, mouseY);
+    }
+}
+
+package me.kctops6.usefulvillagers;
+
+import me.kctops6.usefulvillagers.config.PvConfig;
+import me.kctops6.usefulvillagers.menu.ModMenus;
+import me.kctops6.usefulvillagers.network.OpenVillagerInvPacket;
+import me.kctops6.usefulvillagers.network.PacketHandler;
+import me.kctops6.usefulvillagers.screen.VillagerInventoryScreen;
+import net.minecraft.client.gui.screens.MenuScreens;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.fml.ModLoadingContext;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
+import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
+import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+@Mod(ProductiveVillagers.MODID)
+public class ProductiveVillagers {
+    public static final String MODID = "productivevillagers";
+    public static final Logger LOGGER = LogManager.getLogger();
+
+    public ProductiveVillagers() {
+        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+
+        // 1. Initialize Network immediately to prevent "Locked Channel" crashes
+        PacketHandler.register();
+        PacketHandler.INSTANCE.messageBuilder(OpenVillagerInvPacket.class, 0)
+                .encoder(OpenVillagerInvPacket::encode)
+                .decoder(OpenVillagerInvPacket::decode)
+                .consumerMainThread(OpenVillagerInvPacket::handle)
+                .add();
+
+        // 2. Register Config and Menus
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, PvConfig.SPEC);
+        ModMenus.MENUS.register(modEventBus);
+
+        // 3. Register Lifecycle Listeners
+        modEventBus.addListener(this::commonSetup); // Now resolved by method below
+        modEventBus.addListener(this::clientSetup);
+
+        // 4. Register Gameplay Events
+        MinecraftForge.EVENT_BUS.register(this);
+    }
+
+    // This is the method that was missing, causing your compiler error
+    private void commonSetup(final FMLCommonSetupEvent event) {
+        LOGGER.info("Productive Villagers Common Setup");
+    }
+
+    private void clientSetup(final FMLClientSetupEvent event) {
+        event.enqueueWork(() -> {
+            MenuScreens.register(ModMenus.VILLAGER_INVENTORY_MENU.get(), VillagerInventoryScreen::new);
+        });
+    }
+}
