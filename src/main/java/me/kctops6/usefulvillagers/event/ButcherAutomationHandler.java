@@ -83,7 +83,7 @@ public class ButcherAutomationHandler {
             int limit = getLimitForSpecies(species);
 
             boolean needsWeapon = PvConfig.BUTCHER_NEEDS_WEAPON.get();
-            if (population.size() > limit && (!needsWeapon || isHoldingWeapon(butcher))) {
+            if (population.size() > limit && (!needsWeapon || equipWeaponIfAvailable(butcher))) {
                 Animal victim = population.stream().filter(a -> !a.isBaby()).findFirst().orElse(null);
                 if (victim != null) {
                     if (!moveAndInteract(butcher, victim)) return true;
@@ -92,7 +92,7 @@ public class ButcherAutomationHandler {
                     DamageSource source = butcher.damageSources().mobAttack(butcher);
                     victim.hurt(source, Float.MAX_VALUE);
 
-                    if (needsWeapon) consumeWeaponDurability(butcher);
+                    if (needsWeapon) consumeHeldWeaponDurability(butcher);
                     butcher.swing(InteractionHand.MAIN_HAND);
 
                     // Collect drops immediately if close enough
@@ -142,18 +142,31 @@ public class ButcherAutomationHandler {
         return false;
     }
 
-    private static void consumeWeaponDurability(Villager butcher) {
+    private static boolean equipWeaponIfAvailable(Villager butcher) {
+        ItemStack held = butcher.getItemInHand(InteractionHand.MAIN_HAND);
+        if (held.getItem() instanceof SwordItem || held.getItem() instanceof AxeItem) {
+            return true;
+        }
+
         SimpleContainer inv = butcher.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {
             ItemStack stack = inv.getItem(i);
             if (stack.getItem() instanceof SwordItem || stack.getItem() instanceof AxeItem) {
-                if (stack.isDamageableItem()) {
-                    stack.setDamageValue(stack.getDamageValue() + 1);
-                    if (stack.getDamageValue() >= stack.getMaxDamage()) {
-                        stack.shrink(1);
-                    }
+                butcher.setItemInHand(InteractionHand.MAIN_HAND, stack);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void consumeHeldWeaponDurability(Villager butcher) {
+        ItemStack held = butcher.getItemInHand(InteractionHand.MAIN_HAND);
+        if (held.getItem() instanceof SwordItem || held.getItem() instanceof AxeItem) {
+            if (held.isDamageableItem()) {
+                held.setDamageValue(held.getDamageValue() + 1);
+                if (held.getDamageValue() >= held.getMaxDamage()) {
+                    butcher.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
                 }
-                break;
             }
         }
     }
@@ -259,15 +272,6 @@ public class ButcherAutomationHandler {
     private static boolean needsBreedingMaterials(Villager butcher) {
         SimpleContainer inv = butcher.getInventory();
         return inv.countItem(Items.CARROT) < 4 || inv.countItem(Items.POTATO) < 4 || inv.countItem(Items.WHEAT) < 4 || inv.countItem(Items.WHEAT_SEEDS) < 4;
-    }
-
-    private static boolean isHoldingWeapon(Villager butcher) {
-        SimpleContainer inv = butcher.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            Item item = inv.getItem(i).getItem();
-            if (item instanceof SwordItem || item instanceof AxeItem) return true;
-        }
-        return false;
     }
 
     private static void goToWorkstation(Villager villager) {
