@@ -16,7 +16,7 @@ public class VillagerInventoryScreen extends AbstractContainerScreen<VillagerInv
     public VillagerInventoryScreen(VillagerInventoryMenu menu, Inventory playerInv, Component title) {
         super(menu, playerInv, title);
         this.imageHeight = 133;
-        this.inventoryLabelY = this.imageHeight - 94;
+        this.inventoryLabelY = 40;
     }
 
     @Override
