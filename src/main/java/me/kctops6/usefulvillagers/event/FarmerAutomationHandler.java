@@ -2,6 +2,7 @@ package me.kctops6.usefulvillagers.event;
 
 import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.config.PvConfig;
+import me.kctops6.usefulvillagers.util.VillagerNavigationUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.server.level.ServerLevel;
@@ -42,6 +43,7 @@ public class FarmerAutomationHandler {
         if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
         if ((villager.tickCount + villager.getId()) % 20 != 0) return;
         if (villager.level().isNight() || villager.isSleeping()) return;
+
         if (villager.getVillagerData().getProfession() == VillagerProfession.FARMER) {
             restrictSharing(villager);
             boolean performedAction = performDiligentFarming(villager);
@@ -55,7 +57,7 @@ public class FarmerAutomationHandler {
                         performedAction = searchAndHarvestSpecialty(villager, level);
                     }
                 }
-                if (!performedAction) goToWorkstation(villager);
+                if (!performedAction) VillagerNavigationUtils.goToWorkstation(villager);
             }
         }
     }
@@ -70,18 +72,6 @@ public class FarmerAutomationHandler {
                 villager.getBrain().eraseMemory(MemoryModuleType.INTERACTION_TARGET);
             }
         }
-    }
-
-    private static void goToWorkstation(Villager villager) {
-        villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(globalPos -> {
-            BlockPos workPos = globalPos.pos();
-            if (villager.blockPosition().distSqr(workPos) > 2.25) {
-                villager.getNavigation().moveTo(workPos.getX(), workPos.getY(), workPos.getZ(), 0.5D);
-            } else {
-                villager.getNavigation().stop();
-                villager.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
-            }
-        });
     }
 
     private static boolean useInventoryBoneMeal(Villager villager) {
@@ -262,13 +252,7 @@ public class FarmerAutomationHandler {
     }
 
     private static boolean moveAndAction(Villager villager, BlockPos target) {
-        double reach = PvConfig.HARVEST_REACH.get();
-        if (villager.blockPosition().distSqr(target) > (reach * reach)) {
-            villager.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 0.6D);
-            return false;
-        }
-        villager.getNavigation().stop();
-        return true;
+        return VillagerNavigationUtils.moveToOrInteract(villager, target, PvConfig.HARVEST_REACH.get());
     }
 
     private static void replantSameCrop(ServerLevel level, BlockPos pos, SimpleContainer inv, Block oldCrop) {

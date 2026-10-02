@@ -2,6 +2,7 @@ package me.kctops6.usefulvillagers.event;
 
 import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.config.PvConfig;
+import me.kctops6.usefulvillagers.util.VillagerNavigationUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.server.level.ServerLevel;
@@ -57,7 +58,7 @@ public class ButcherAutomationHandler {
         }
 
         if (!performedAction) {
-            goToWorkstation(villager);
+            VillagerNavigationUtils.goToWorkstation(villager);
         }
     }
 
@@ -65,7 +66,6 @@ public class ButcherAutomationHandler {
         BlockPos workPos = butcher.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
         if (workPos == null) return false;
 
-        // FULL INVENTORY GUARD: Stop hunting if butcher inventory has no empty slots
         if (!hasInventorySpace(butcher)) {
             return false;
         }
@@ -88,14 +88,12 @@ public class ButcherAutomationHandler {
                 if (victim != null) {
                     if (!moveAndInteract(butcher, victim)) return true;
 
-                    // Deal lethal damage so the mob plays its visible death animation
                     DamageSource source = butcher.damageSources().mobAttack(butcher);
                     victim.hurt(source, Float.MAX_VALUE);
 
                     if (needsWeapon) consumeHeldWeaponDurability(butcher);
                     butcher.swing(InteractionHand.MAIN_HAND);
 
-                    // Collect drops immediately if close enough
                     collectNearbyDrops(butcher);
                     return true;
                 }
@@ -173,17 +171,8 @@ public class ButcherAutomationHandler {
 
     private static boolean moveAndInteract(Villager butcher, Object target) {
         butcher.getBrain().eraseMemory(MemoryModuleType.INTERACTION_TARGET);
-
         BlockPos pos = (target instanceof LivingEntity e) ? e.blockPosition() : (BlockPos) target;
-        double reach = PvConfig.HARVEST_REACH.get();
-
-        if (butcher.blockPosition().distSqr(pos) > (reach * reach)) {
-            butcher.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 0.6D);
-            return false;
-        }
-
-        butcher.getNavigation().stop();
-        return true;
+        return VillagerNavigationUtils.moveToOrInteract(butcher, pos, PvConfig.HARVEST_REACH.get());
     }
 
     private static boolean restockFromFarmerStorage(Villager butcher) {
@@ -231,16 +220,14 @@ public class ButcherAutomationHandler {
                 if (!moveAndInteract(butcher, pos)) return true;
 
                 IItemHandler handler = be.getCapability(ForgeCapabilities.ITEM_HANDLER).orElse(null);
-                if (handler != null) {
-                    SimpleContainer inv = butcher.getInventory();
-                    for (int i = 0; i < inv.getContainerSize(); i++) {
-                        ItemStack stack = inv.getItem(i);
-                        if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
-                            inv.setItem(i, ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false));
-                        }
+                SimpleContainer inv = butcher.getInventory();
+                for (int i = 0; i < inv.getContainerSize(); i++) {
+                    ItemStack stack = inv.getItem(i);
+                    if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
+                        inv.setItem(i, ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false));
                     }
-                    butcher.swing(InteractionHand.MAIN_HAND);
                 }
+                butcher.swing(InteractionHand.MAIN_HAND);
                 return true;
             }
         }
@@ -272,14 +259,6 @@ public class ButcherAutomationHandler {
     private static boolean needsBreedingMaterials(Villager butcher) {
         SimpleContainer inv = butcher.getInventory();
         return inv.countItem(Items.CARROT) < 4 || inv.countItem(Items.POTATO) < 4 || inv.countItem(Items.WHEAT) < 4 || inv.countItem(Items.WHEAT_SEEDS) < 4;
-    }
-
-    private static void goToWorkstation(Villager villager) {
-        villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(gp -> {
-            if (villager.blockPosition().distSqr(gp.pos()) > 2.25) {
-                villager.getNavigation().moveTo(gp.pos().getX(), gp.pos().getY(), gp.pos().getZ(), 0.5D);
-            }
-        });
     }
 
     private static int getLimitForSpecies(Class<? extends Animal> species) {

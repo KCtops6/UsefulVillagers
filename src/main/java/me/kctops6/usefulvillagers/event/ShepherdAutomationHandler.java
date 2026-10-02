@@ -2,6 +2,7 @@ package me.kctops6.usefulvillagers.event;
 
 import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.config.PvConfig;
+import me.kctops6.usefulvillagers.util.VillagerNavigationUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.server.level.ServerLevel;
@@ -32,7 +33,7 @@ public class ShepherdAutomationHandler {
         if (villager.tickCount % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.SHEPHERD) {
             boolean performedAction = tryShearingSheep(villager);
             if (!performedAction) performedAction = depositWool(villager);
-            if (!performedAction) goToWorkstation(villager);
+            if (!performedAction) VillagerNavigationUtils.goToWorkstation(villager);
         }
     }
 
@@ -113,24 +114,6 @@ public class ShepherdAutomationHandler {
     }
 
     private static boolean moveAndAction(Villager villager, BlockPos target) {
-        double reach = PvConfig.SHEPHERD_REACH.get();
-        if (villager.blockPosition().distSqr(target) > (reach * reach)) {
-            villager.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 0.5D);
-            return false;
-        }
-        villager.getNavigation().stop();
-        return true;
-    }
-
-    private static void goToWorkstation(Villager villager) {
-        villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).ifPresent(globalPos -> {
-            BlockPos workPos = globalPos.pos();
-            if (villager.blockPosition().distSqr(workPos) > 2.25) {
-                villager.getNavigation().moveTo(workPos.getX(), workPos.getY(), workPos.getZ(), 0.5D);
-            } else {
-                villager.getNavigation().stop();
-                villager.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
-            }
-        });
+        return VillagerNavigationUtils.moveToOrInteract(villager, target, PvConfig.SHEPHERD_REACH.get());
     }
 }
