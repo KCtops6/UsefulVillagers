@@ -5,6 +5,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.SimpleMenuProvider;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraftforge.network.NetworkEvent;
 import net.minecraftforge.network.NetworkHooks;
@@ -29,8 +30,9 @@ public class OpenVillagerInvPacket {
     public static void handle(OpenVillagerInvPacket msg, Supplier<NetworkEvent.Context> ctx) {
         ctx.get().enqueueWork(() -> {
             ServerPlayer player = ctx.get().getSender();
-            if (player != null && player.level().getEntity(msg.entityId) instanceof Villager villager) {
-                if (player.distanceToSqr(villager) < 64.0) {
+            if (player != null) {
+                Entity target = player.serverLevel().getEntity(msg.entityId);
+                if (target instanceof Villager villager && player.distanceToSqr(villager) < 64.0) {
                     NetworkHooks.openScreen(player, new SimpleMenuProvider(
                             (id, inv, p) -> new VillagerInventoryMenu(id, inv, villager.getInventory()),
                             Component.literal("Villager Inventory")
