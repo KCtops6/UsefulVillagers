@@ -34,17 +34,14 @@ public class ButcherAutomationHandler {
     @SubscribeEvent
     public static void onButcherTick(LivingEvent.LivingTickEvent event) {
         if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
-        if (villager.tickCount % 20 != 0 || villager.getVillagerData().getProfession() != VillagerProfession.BUTCHER) return;
-
+        if ((villager.tickCount + villager.getId()) % 20 != 0 || villager.getVillagerData().getProfession() != VillagerProfession.BUTCHER) return;
         if (villager.level().isNight() || villager.isSleeping()) return;
 
-        // Pickup drops spawned from kills before processing new tasks
         collectNearbyDrops(villager);
 
         int level = villager.getVillagerData().getLevel();
         boolean performedAction = false;
 
-        // PRIORITIZE DEPOSITING: Clean out inventory before slaughtering/breeding
         if (hasProductsToDeposit(villager)) {
             performedAction = depositProducts(villager);
         }
@@ -192,19 +189,22 @@ public class ButcherAutomationHandler {
 
         for (BlockPos pos : BlockPos.betweenClosed(farmerWorkstation.offset(-3, -1, -3), farmerWorkstation.offset(3, 1, 3))) {
             BlockEntity be = level.getBlockEntity(pos);
-            if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) {
-                if (!moveAndInteract(butcher, pos)) return true;
-
-                IItemHandler handler = be.getCapability(ForgeCapabilities.ITEM_HANDLER).orElse(null);
-                if (handler != null) {
+            if (be != null) {
+                final boolean[] handled = {false};
+                be.getCapability(ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
+                    if (!moveAndInteract(butcher, pos)) {
+                        handled[0] = true;
+                        return;
+                    }
                     Item[] needed = {Items.CARROT, Items.POTATO, Items.WHEAT, Items.WHEAT_SEEDS};
                     for (Item item : needed) {
                         int has = butcher.getInventory().countItem(item);
                         if (has < 12) withdrawItem(butcher, handler, item, 12 - has);
                     }
                     butcher.swing(InteractionHand.MAIN_HAND);
-                }
-                return true;
+                    handled[0] = true;
+                });
+                if (handled[0]) return true;
             }
         }
         return false;
@@ -216,19 +216,24 @@ public class ButcherAutomationHandler {
 
         for (BlockPos pos : BlockPos.betweenClosed(workPos.offset(-3, -1, -3), workPos.offset(3, 1, 3))) {
             BlockEntity be = butcher.level().getBlockEntity(pos);
-            if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) {
-                if (!moveAndInteract(butcher, pos)) return true;
-
-                IItemHandler handler = be.getCapability(ForgeCapabilities.ITEM_HANDLER).orElse(null);
-                SimpleContainer inv = butcher.getInventory();
-                for (int i = 0; i < inv.getContainerSize(); i++) {
-                    ItemStack stack = inv.getItem(i);
-                    if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
-                        inv.setItem(i, ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false));
+            if (be != null) {
+                final boolean[] deposited = {false};
+                be.getCapability(ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
+                    if (!moveAndInteract(butcher, pos)) {
+                        deposited[0] = true;
+                        return;
                     }
-                }
-                butcher.swing(InteractionHand.MAIN_HAND);
-                return true;
+                    SimpleContainer inv = butcher.getInventory();
+                    for (int i = 0; i < inv.getContainerSize(); i++) {
+                        ItemStack stack = inv.getItem(i);
+                        if (!stack.isEmpty() && !isBreedingItem(stack.getItem()) && !(stack.getItem() instanceof TieredItem)) {
+                            inv.setItem(i, ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false));
+                        }
+                    }
+                    butcher.swing(InteractionHand.MAIN_HAND);
+                    deposited[0] = true;
+                });
+                if (deposited[0]) return true;
             }
         }
         return false;
