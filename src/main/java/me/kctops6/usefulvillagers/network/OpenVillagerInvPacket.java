@@ -36,7 +36,7 @@ public class OpenVillagerInvPacket {
                     NetworkHooks.openScreen(player, new SimpleMenuProvider(
                             (id, inv, p) -> new VillagerInventoryMenu(id, inv, villager.getInventory()),
                             Component.literal("Villager Inventory")
-                    ), (buf) -> {});
+                    ), (buf) -> buf.writeInt(villager.getId()));
                 }
             }
         });
