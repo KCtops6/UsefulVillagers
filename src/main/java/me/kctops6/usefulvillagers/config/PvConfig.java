@@ -42,12 +42,12 @@ public class PvConfig {
 
         BUILDER.push("Butcher Automation Settings");
         GLOBAL_ANIMAL_LIMIT = BUILDER.comment("Global limit for animal species before a butcher starts harvesting")
-                .defineInRange("globalAnimalLimit", 3, 2, 20);
-        COW_LIMIT = BUILDER.defineInRange("cowLimit", 3, 2, 20);
-        SHEEP_LIMIT = BUILDER.defineInRange("sheepLimit", 3, 2, 20);
-        PIG_LIMIT = BUILDER.defineInRange("pigLimit", 3, 2, 20);
-        CHICKEN_LIMIT = BUILDER.defineInRange("chickenLimit", 3, 2, 20);
-        RABBIT_LIMIT = BUILDER.defineInRange("rabbitLimit", 3, 2, 20);
+                .defineInRange("globalAnimalLimit", 10, 2, 20);
+        COW_LIMIT = BUILDER.defineInRange("cowLimit", 10, 2, 20);
+        SHEEP_LIMIT = BUILDER.defineInRange("sheepLimit", 10, 2, 20);
+        PIG_LIMIT = BUILDER.defineInRange("pigLimit", 10, 2, 20);
+        CHICKEN_LIMIT = BUILDER.defineInRange("chickenLimit", 10, 2, 20);
+        RABBIT_LIMIT = BUILDER.defineInRange("rabbitLimit", 10, 2, 20);
         BUTCHER_NEEDS_WEAPON = BUILDER.comment("If true, butchers must possess a sword or axe to slaughter animals.")
                 .define("butcherNeedsWeapon", true);
         BUILDER.pop();

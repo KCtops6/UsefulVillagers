@@ -1,6 +1,5 @@
-package me.kctops6.usefulvillagers.event;
+package me.kctops6.usefulvillagers.ai;
 
-import me.kctops6.usefulvillagers.UsefulVillagers;
 import me.kctops6.usefulvillagers.config.PvConfig;
 import me.kctops6.usefulvillagers.util.VillagerNavigationUtils;
 import net.minecraft.core.BlockPos;
@@ -9,6 +8,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.minecraft.world.entity.animal.Sheep;
 import net.minecraft.world.entity.npc.Villager;
@@ -18,28 +18,51 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
-import net.minecraftforge.event.entity.living.LivingEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.items.ItemHandlerHelper;
 
+import java.util.EnumSet;
 import java.util.List;
 
-@Mod.EventBusSubscriber(modid = UsefulVillagers.MODID)
-public class ShepherdAutomationHandler {
+public class ShepherdWorkGoal extends Goal {
+    private final Villager villager;
+    private int cooldown = 0;
 
-    @SubscribeEvent
-    public static void onShepherdTick(LivingEvent.LivingTickEvent event) {
-        if (!(event.getEntity() instanceof Villager villager) || villager.level().isClientSide) return;
-        if (villager.level().isNight() || villager.isSleeping()) return;
-        if ((villager.tickCount + villager.getId()) % 20 == 0 && villager.getVillagerData().getProfession() == VillagerProfession.SHEPHERD) {
-            boolean performedAction = tryShearingSheep(villager);
-            if (!performedAction) performedAction = depositWool(villager);
-            if (!performedAction) VillagerNavigationUtils.goToWorkstation(villager);
-        }
+    public ShepherdWorkGoal(Villager villager) {
+        this.villager = villager;
+        this.setFlags(EnumSet.of(Goal.Flag.MOVE, Goal.Flag.LOOK));
     }
 
-    private static boolean tryShearingSheep(Villager villager) {
+    @Override
+    public boolean canUse() {
+        if (villager.level().isClientSide()) return false;
+        if (villager.getVillagerData().getProfession() != VillagerProfession.SHEPHERD) return false;
+        if (villager.level().isNight() || villager.isSleeping()) return false;
+
+        if (cooldown > 0) {
+            cooldown--;
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean canContinueToUse() {
+        return false;
+    }
+
+    @Override
+    public void start() {
+        cooldown = 20;
+    }
+
+    @Override
+    public void tick() {
+        boolean performedAction = tryShearingSheep();
+        if (!performedAction) performedAction = depositWool();
+        if (!performedAction) VillagerNavigationUtils.goToWorkstation(villager);
+    }
+
+    private boolean tryShearingSheep() {
         if (PvConfig.SHEPHERD_NEEDS_SHEARS.get() && villager.getInventory().countItem(Items.SHEARS) <= 0) return false;
         ServerLevel level = (ServerLevel) villager.level();
         BlockPos workPos = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).map(GlobalPos::pos).orElse(null);
@@ -49,21 +72,21 @@ public class ShepherdAutomationHandler {
         List<Sheep> sheepList = level.getEntitiesOfClass(Sheep.class, area, sheep -> sheep.readyForShearing() && !sheep.isBaby());
         if (!sheepList.isEmpty()) {
             Sheep target = sheepList.get(0);
-            if (moveAndAction(villager, target.blockPosition())) {
+            if (moveAndAction(target.blockPosition())) {
                 villager.swing(InteractionHand.MAIN_HAND);
                 List<ItemStack> drops = target.onSheared(null, ItemStack.EMPTY, level, target.blockPosition(), 0);
                 for (ItemStack stack : drops) {
                     ItemStack leftover = villager.getInventory().addItem(stack);
                     if (!leftover.isEmpty()) target.spawnAtLocation(leftover);
                 }
-                if (PvConfig.SHEPHERD_NEEDS_SHEARS.get()) damageShears(villager);
+                if (PvConfig.SHEPHERD_NEEDS_SHEARS.get()) damageShears();
             }
             return true;
         }
         return false;
     }
 
-    private static void damageShears(Villager villager) {
+    private void damageShears() {
         SimpleContainer inv = villager.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {
             ItemStack stack = inv.getItem(i);
@@ -75,7 +98,7 @@ public class ShepherdAutomationHandler {
         }
     }
 
-    private static boolean depositWool(Villager villager) {
+    private boolean depositWool() {
         ServerLevel level = (ServerLevel) villager.level();
         SimpleContainer inv = villager.getInventory();
         boolean hasWool = false;
@@ -94,7 +117,7 @@ public class ShepherdAutomationHandler {
             if (be != null) {
                 final boolean[] deposited = {false};
                 be.getCapability(ForgeCapabilities.ITEM_HANDLER).ifPresent(handler -> {
-                    if (!moveAndAction(villager, pos)) {
+                    if (!moveAndAction(pos)) {
                         deposited[0] = true;
                         return;
                     }
@@ -114,7 +137,7 @@ public class ShepherdAutomationHandler {
         return false;
     }
 
-    private static boolean moveAndAction(Villager villager, BlockPos target) {
+    private boolean moveAndAction(BlockPos target) {
         return VillagerNavigationUtils.moveToOrInteract(villager, target, PvConfig.SHEPHERD_REACH.get());
     }
 }

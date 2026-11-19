@@ -1,6 +1,9 @@
 package me.kctops6.usefulvillagers.menu;
 
 import me.kctops6.usefulvillagers.UsefulVillagers;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraftforge.common.extensions.IForgeMenuType;
 import net.minecraftforge.registries.DeferredRegister;
@@ -12,6 +15,12 @@ public class ModMenus {
             DeferredRegister.create(ForgeRegistries.MENU_TYPES, UsefulVillagers.MODID);
 
     public static final RegistryObject<MenuType<VillagerInventoryMenu>> VILLAGER_INVENTORY_MENU =
-            MENUS.register("villager_inventory", () -> IForgeMenuType.create((windowId, inv, data) ->
-                    new VillagerInventoryMenu(windowId, inv)));
+            MENUS.register("villager_inventory", () -> IForgeMenuType.create((windowId, inv, data) -> {
+                int entityId = data.readInt();
+                Entity entity = Minecraft.getInstance().level != null ? Minecraft.getInstance().level.getEntity(entityId) : null;
+                if (entity instanceof Villager villager) {
+                    return new VillagerInventoryMenu(windowId, inv, villager.getInventory());
+                }
+                return new VillagerInventoryMenu(windowId, inv);
+            }));
 }
