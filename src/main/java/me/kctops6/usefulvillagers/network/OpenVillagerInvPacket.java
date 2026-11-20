@@ -4,6 +4,7 @@ import me.kctops6.usefulvillagers.menu.VillagerInventoryMenu;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.npc.Villager;
@@ -36,7 +37,14 @@ public class OpenVillagerInvPacket {
                     NetworkHooks.openScreen(player, new SimpleMenuProvider(
                             (id, inv, p) -> new VillagerInventoryMenu(id, inv, villager.getInventory()),
                             Component.literal("Villager Inventory")
-                    ), (buf) -> buf.writeInt(villager.getId()));
+                    ), (buf) -> {
+                        buf.writeInt(villager.getId());
+                        SimpleContainer container = villager.getInventory();
+                        buf.writeInt(container.getContainerSize());
+                        for (int i = 0; i < container.getContainerSize(); i++) {
+                            buf.writeItem(container.getItem(i));
+                        }
+                    });
                 }
             }
         });
